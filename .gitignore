@@ -46,3 +46,4 @@ tmp/
 
 # Local research working files (the reviewed plan lives in docs/)
 .research/
+.forecast-state/

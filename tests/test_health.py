@@ -2,7 +2,6 @@ from fastapi.testclient import TestClient
 
 from forecasting_service.main import app
 
-
 client = TestClient(app)
 
 

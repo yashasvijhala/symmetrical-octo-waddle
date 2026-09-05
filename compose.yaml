@@ -1,0 +1,14 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      FORECAST_STATE_DIR: /var/lib/forecasting
+      FORECAST_MAX_WORKERS: 2
+    volumes:
+      - forecast-state:/var/lib/forecasting
+    restart: unless-stopped
+
+volumes:
+  forecast-state:

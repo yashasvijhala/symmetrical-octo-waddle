@@ -1,6 +1,6 @@
 from typing import Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/health")
@@ -18,10 +18,12 @@ async def liveness() -> HealthResponse:
 
 
 @router.get("/ready", response_model=HealthResponse)
-async def readiness() -> HealthResponse:
+async def readiness(request: Request) -> HealthResponse:
     """Report whether configured dependencies are ready.
 
-    Dependency checks will be added when persistence and queues are introduced.
+    The local durable store must be initialized for the process to be ready.
     """
 
+    if not request.app.state.runtime.store.root.exists():
+        raise RuntimeError("state store is unavailable")
     return HealthResponse()

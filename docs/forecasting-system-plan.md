@@ -5,6 +5,16 @@
 **Scope:** a general-purpose, API-first service for panel time-series forecasting from a separate
 Next.js product
 
+## Implementation status
+
+The repository now contains a complete runnable local implementation of the data lifecycle,
+profiling, immutable manifests, feature compilation, rolling backtests, global LightGBM,
+AutoGluon adapter, model registry, background jobs, forecasting, cold starts, bottom-up hierarchy
+aggregation, actuals, and monitoring described below. PostgreSQL/S3/distributed-queue adapters,
+MinT reconciliation, foundation-model weight downloads, and infrastructure-specific authentication
+remain deployment choices; their interfaces and API contracts are already separated from the local
+durable adapters.
+
 ## Executive decision
 
 Build a hybrid forecasting platform with two complementary modeling lanes:
@@ -374,7 +384,7 @@ resolved immutable model version.
 
 ## Implementation sequence
 
-### Phase 0 — repository foundation (completed here)
+### Phase 0 — repository foundation (implemented)
 
 - `src/` package layout, app factory, environment settings, health/readiness routes;
 - lint/type/test configuration, example environment, comprehensive `.gitignore`;
@@ -382,7 +392,7 @@ resolved immutable model version.
 
 **Exit check:** clean install and quality commands pass on Python 3.12.
 
-### Phase 1 — contracts and persistence
+### Phase 1 — contracts and persistence (implemented with local durable adapters)
 
 - Pydantic request/response models and generated OpenAPI examples;
 - PostgreSQL schema/migrations, repository interfaces, tenant ownership, idempotency records;
@@ -392,7 +402,7 @@ resolved immutable model version.
 **Exit check:** a Next.js integration test uploads a file, confirms a manifest, polls a job, and can
 only access its own tenant's immutable dataset version.
 
-### Phase 2 — ingestion, profiler, and feature engine
+### Phase 2 — ingestion, profiler, and feature engine (implemented)
 
 - CSV/Parquet streaming ingestion with Polars, content hashes, canonical Parquet output;
 - duplicate/gap/frequency/timezone checks and data-quality report;
@@ -404,7 +414,7 @@ only access its own tenant's immutable dataset version.
 **Exit check:** inserting arbitrary future target values does not change any feature row at or before
 the cutoff; large-file profiling stays within its memory budget.
 
-### Phase 3 — backtesting and custom LightGBM
+### Phase 3 — backtesting and custom LightGBM (implemented)
 
 - expanding-window splitter, baselines, metric/segment engine, launch/cohort simulations;
 - global direct/recursive LightGBM adapters, quantile models, tuning budget, interval calibration;
@@ -413,7 +423,7 @@ the cutoff; large-file profiling stays within its memory budget.
 **Exit check:** reproducible end-to-end run on representative regular, intermittent, multi-series,
 and young-series fixtures; champion cannot promote without beating/justifying baseline performance.
 
-### Phase 4 — AutoGluon accuracy lane
+### Phase 4 — AutoGluon accuracy lane (adapter implemented; optional dependency)
 
 - isolated CPU/GPU worker image and AutoGluon adapter;
 - budget-aware model policies, Chronos-2 option, weighted ensembles, consistent metric conversion;
@@ -423,7 +433,7 @@ and young-series fixtures; champion cannot promote without beating/justifying ba
 **Exit check:** AutoGluon and LightGBM predictions share one output schema and are compared on identical
 cutoffs; failure of one candidate does not lose the experiment.
 
-### Phase 5 — cold start, hierarchy, and production hardening
+### Phase 5 — cold start and hierarchy (local implementation; deployment hardening is environment-specific)
 
 - neighbor/analog index, peer profile and level-prior API, age-dependent blending;
 - bottom-up and MinT reconciliation;
