@@ -1,7 +1,7 @@
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, FiniteFloat, model_validator
 
 
 class ResourceState(StrEnum):
@@ -50,6 +50,11 @@ class DatasetManifest(BaseModel):
             required.append(self.item_id_column)
         if len(required) != len(set(required)):
             raise ValueError("timestamp, target, and item ID columns must be distinct")
+        weight_columns = [
+            name for name, role in self.column_roles.items() if role == ColumnRole.WEIGHT
+        ]
+        if len(weight_columns) > 1:
+            raise ValueError("only one weight column may be declared")
         return self
 
 
@@ -75,7 +80,7 @@ class ExperimentCreate(BaseModel):
 
 class NewItem(BaseModel):
     item_id: str
-    level_prior: float | None = None
+    level_prior: FiniteFloat | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -91,7 +96,7 @@ class ForecastCreate(BaseModel):
 class ActualPoint(BaseModel):
     item_id: str
     timestamp: str
-    value: float
+    value: FiniteFloat
 
 
 class ActualsCreate(BaseModel):

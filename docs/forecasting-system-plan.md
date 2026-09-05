@@ -305,8 +305,9 @@ engines so they can be separated later without creating premature microservices.
 
 ## API contract for the Next.js client
 
-All mutations accept `Idempotency-Key`; all resources are tenant-scoped from the authenticated claim,
-never from a trusted request-body `tenant_id`. Long operations return `202 Accepted` and a job URL.
+Resource-creation mutations accept `Idempotency-Key`; retries must use an identical payload. All
+resources are tenant-scoped from the authenticated claim, never from a trusted request-body
+`tenant_id`. Long operations return `202 Accepted` and a job URL.
 
 ### Dataset lifecycle
 
@@ -433,10 +434,10 @@ and young-series fixtures; champion cannot promote without beating/justifying ba
 **Exit check:** AutoGluon and LightGBM predictions share one output schema and are compared on identical
 cutoffs; failure of one candidate does not lose the experiment.
 
-### Phase 5 — cold start and hierarchy (local implementation; deployment hardening is environment-specific)
+### Phase 5 — cold start and hierarchy (partially implemented; distributed hardening remains)
 
-- neighbor/analog index, peer profile and level-prior API, age-dependent blending;
-- bottom-up and MinT reconciliation;
+- metadata-neighbor/peer profile and level-prior API; age-dependent blending remains;
+- bottom-up reconciliation is implemented; independently modeled aggregates and MinT remain;
 - signed webhooks, quotas, rate limits, audit log, observability, drift/coverage dashboards;
 - canary promotion, rollback alias, retention/deletion policy, load and chaos tests.
 

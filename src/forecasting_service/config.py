@@ -2,6 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,8 +19,9 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     api_prefix: str = "/v1"
     state_dir: Path = Path(".forecast-state")
-    max_workers: int = 2
-    max_upload_bytes: int = 2_147_483_648
+    max_workers: int = Field(default=2, ge=1, le=64)
+    max_upload_bytes: int = Field(default=2_147_483_648, ge=1_048_576)
+    api_keys: dict[str, str] = Field(default_factory=dict)
 
 
 @lru_cache

@@ -16,6 +16,8 @@ training, model registration, cold-start forecasting, promotion, and accuracy mo
   empirical residual quantiles.
 - Optional AutoGluon `TimeSeriesPredictor` adapter and model-zoo leaderboard.
 - Asynchronous persistent experiment/forecast jobs with progress, failure details, and cancellation.
+- Transactional SQLite metadata in WAL mode, atomic job creation, restart recovery, and payload-safe
+  idempotency for dataset, experiment, and forecast creation.
 - Model registry, baseline promotion gate, retirement, immutable lineage, actuals, and monitoring.
 - Metadata/level-prior cold starts and coherent bottom-up hierarchy aggregates.
 - Local durable adapters requiring no cloud account. Storage/model/queue boundaries can be replaced
@@ -40,8 +42,10 @@ For the full AutoGluon/Chronos model zoo:
 uv sync --dev --extra autogluon
 ```
 
-Open `http://127.0.0.1:8000/docs`. API calls require `X-Tenant-ID`; use `local` during development.
-Copy `.env.example` to `.env` to customize the state directory and worker count.
+Open `http://127.0.0.1:8000/docs`. In local/test mode, send `X-Tenant-ID` to exercise isolation;
+otherwise the tenant defaults to `local`. Copy `.env.example` to `.env` to customize the service.
+In production, configure `FORECAST_API_KEYS` as a JSON tenant-to-secret map and send both
+`X-Tenant-ID` and `X-API-Key`. Production starts fail closed when keys are absent.
 
 ## Workflow
 
@@ -67,3 +71,15 @@ uv run pytest --cov=forecasting_service
 
 Runtime state, uploads, normalized data, models, and predictions live under `.forecast-state/` and
 are ignored by Git.
+
+## Deployment boundary
+
+The included runtime is a production-hardened **single-node** profile: persistent SQLite/WAL,
+bounded streaming uploads, atomic idempotency, restart recovery, API-key isolation, immutable
+artifacts, non-root container execution, and health probes. Run one API process per state volume.
+
+Horizontal scaling requires the distributed adapters described in the architecture plan:
+PostgreSQL metadata, S3-compatible artifacts, and a leased external job queue. Those services need
+real deployment credentials and infrastructure and are intentionally not simulated in this repo.
+Accuracy and throughput must also be benchmarked against representative customer data before an
+SLO can be claimed.

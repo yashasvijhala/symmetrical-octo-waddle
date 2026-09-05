@@ -4,8 +4,10 @@ services:
     ports:
       - "8000:8000"
     environment:
+      FORECAST_ENVIRONMENT: ${FORECAST_ENVIRONMENT:-local}
       FORECAST_STATE_DIR: /var/lib/forecasting
       FORECAST_MAX_WORKERS: 2
+      FORECAST_API_KEYS: '${FORECAST_API_KEYS:-{}}'
     volumes:
       - forecast-state:/var/lib/forecasting
     restart: unless-stopped

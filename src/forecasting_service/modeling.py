@@ -52,6 +52,7 @@ def train_lightgbm(
         actual: list[float] = []
         predicted: list[float] = []
         baseline: list[float] = []
+        weights: list[float] = []
         for item in series:
             cutoff = len(item.target) - trim - horizon
             if cutoff < 1:
@@ -63,11 +64,14 @@ def train_lightgbm(
             actual.extend(truth)
             predicted.extend(values)
             baseline.extend(naive)
+            weights.extend(
+                _observation_weight(item, index, spec) for index in range(cutoff, cutoff + horizon)
+            )
             for step, (observed, forecast) in enumerate(zip(truth, values, strict=True), start=1):
                 residuals[step].append(observed - forecast)
-        metrics = _metrics(actual, predicted)
+        metrics = _metrics(actual, predicted, weights)
         metrics.update(
-            {f"baseline_{key}": value for key, value in _metrics(actual, baseline).items()}
+            {f"baseline_{key}": value for key, value in _metrics(actual, baseline, weights).items()}
         )
         fold_metrics.append({"fold": fold, "trim": trim, **metrics})
 
@@ -88,7 +92,11 @@ def train_lightgbm(
         "quantile_offsets": offsets,
         "quantiles": config.quantiles,
         "non_negative": manifest.non_negative,
-        "peer_profiles": _peer_profiles(series, season),
+        "peer_profiles": _peer_profiles(
+            series,
+            season,
+            [*spec["roles"]["static"], *spec["roles"]["hierarchy"]],
+        ),
     }
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(artifact, artifact_path)
@@ -258,6 +266,7 @@ def _feature_spec(
             ColumnRole.KNOWN_FUTURE,
             ColumnRole.PAST_ONLY,
             ColumnRole.HIERARCHY,
+            ColumnRole.WEIGHT,
         )
     }
     names = ["item", "age", "horizon", "month", "weekday", "hour"]
@@ -333,10 +342,12 @@ def _fit_estimators(
     for step in range(1, horizon + 1):
         x_rows: list[list[float]] = []
         labels: list[float] = []
+        weights: list[float] = []
         for item in series:
             for cutoff in range(0, len(item.target) - step):
                 x_rows.append(_features(item, cutoff, step, spec, {}))
                 labels.append(item.target[cutoff + step])
+                weights.append(_observation_weight(item, cutoff + step, spec))
         if len(labels) < 8 or len(set(labels)) < 2:
             estimators.append(
                 {"kind": "constant", "value": float(np.mean(labels)) if labels else 0.0}
@@ -356,7 +367,11 @@ def _fit_estimators(
             verbosity=-1,
             n_jobs=num_threads,
         )
-        model.fit(np.asarray(x_rows, dtype=float), np.asarray(labels, dtype=float))
+        model.fit(
+            np.asarray(x_rows, dtype=float),
+            np.asarray(labels, dtype=float),
+            sample_weight=np.asarray(weights, dtype=float),
+        )
         estimators.append({"kind": "lightgbm", "model": model})
     return estimators
 
@@ -397,21 +412,36 @@ def _trim(item: Series, count: int) -> Series:
     )
 
 
-def _metrics(actual: list[float], predicted: list[float]) -> dict[str, float]:
+def _metrics(
+    actual: list[float], predicted: list[float], weights: list[float] | None = None
+) -> dict[str, float]:
     if not actual:
         return {"mae": math.inf, "rmse": math.inf, "wape": math.inf, "bias": math.inf}
     a = np.asarray(actual, dtype=float)
     p = np.asarray(predicted, dtype=float)
+    w = np.asarray(weights if weights else [1.0] * len(actual), dtype=float)
+    if not w.any():
+        w = np.ones_like(a)
     error = p - a
-    denominator = float(np.abs(a).sum())
+    weight_total = float(w.sum())
+    denominator = float((w * np.abs(a)).sum())
     return {
-        "mae": float(np.abs(error).mean()),
-        "rmse": float(np.sqrt(np.square(error).mean())),
-        "wape": float(np.abs(error).sum() / denominator)
+        "mae": float((w * np.abs(error)).sum() / weight_total),
+        "rmse": float(np.sqrt((w * np.square(error)).sum() / weight_total)),
+        "wape": float((w * np.abs(error)).sum() / denominator)
         if denominator
-        else float(np.abs(error).mean()),
-        "bias": float(error.sum() / denominator) if denominator else float(error.mean()),
+        else float((w * np.abs(error)).sum() / weight_total),
+        "bias": float((w * error).sum() / denominator)
+        if denominator
+        else float((w * error).sum() / weight_total),
     }
+
+
+def _observation_weight(item: Series, index: int, spec: dict[str, Any]) -> float:
+    columns = spec["roles"].get("weight", [])
+    if not columns:
+        return 1.0
+    return float(item.columns[columns[0]][index])
 
 
 def _mean_metrics(folds: list[dict[str, Any]]) -> dict[str, float]:
@@ -481,26 +511,49 @@ def _forecast_rows(
     return rows
 
 
-def _peer_profiles(series: list[Series], season: int) -> dict[str, Any]:
+def _peer_profiles(series: list[Series], season: int, metadata_fields: list[str]) -> dict[str, Any]:
     levels = [float(np.mean(item.target[-min(season, len(item.target)) :])) for item in series]
     profiles = []
+    peers = []
     for item, level in zip(series, levels, strict=True):
         tail = item.target[-min(season, len(item.target)) :]
+        normalized = [value / level for value in tail] if level else [1.0] * len(tail)
         if level:
-            profiles.append([value / level for value in tail])
+            profiles.append(normalized)
+        peers.append(
+            {
+                "item_id": item.item_id,
+                "level": level,
+                "profile": normalized,
+                "metadata": {name: item.columns.get(name, [None])[-1] for name in metadata_fields},
+            }
+        )
     width = min((len(profile) for profile in profiles), default=1)
     profile = (
         np.mean([values[-width:] for values in profiles], axis=0).tolist() if profiles else [1.0]
     )
-    return {"level": float(np.median(levels)) if levels else 0.0, "profile": profile}
+    return {
+        "level": float(np.median(levels)) if levels else 0.0,
+        "profile": profile,
+        "peers": peers,
+    }
 
 
 def _cold_start_rows(
     item: NewItem, horizon: int, artifact: dict[str, Any], frame: pl.DataFrame
 ) -> list[dict[str, Any]]:
     peers = artifact["peer_profiles"]
-    level = item.level_prior if item.level_prior is not None else peers["level"]
-    profile = peers["profile"]
+    neighbors = _nearest_peers(item.metadata, peers.get("peers", []), limit=5)
+    if neighbors:
+        width = min(len(peer["profile"]) for peer in neighbors)
+        profile = np.mean([peer["profile"][-width:] for peer in neighbors], axis=0).tolist()
+        inferred_level = float(np.median([peer["level"] for peer in neighbors]))
+        method = "cold_start_metadata_neighbors"
+    else:
+        profile = peers["profile"]
+        inferred_level = peers["level"]
+        method = "cold_start_peer_prior"
+    level = item.level_prior if item.level_prior is not None else inferred_level
     last_time = frame.get_column("timestamp").to_list()[-1]
     sample = frame.partition_by("item_id", maintain_order=True)[0].get_column("timestamp").to_list()
     delta = sample[-1] - sample[-2] if len(sample) > 1 else timedelta(days=1)
@@ -510,11 +563,39 @@ def _cold_start_rows(
         [last_time + delta * (index + 1) for index in range(horizon)],
         values,
         artifact,
-        "cold_start_analog",
+        method,
     )
     for row in rows:
-        row["warnings"] = ["cold start forecast; uncertainty may be understated"]
+        for name in [key for key in row if key.startswith("q")]:
+            widened = row["mean"] + 1.5 * (row[name] - row["mean"])
+            row[name] = max(0.0, widened) if artifact.get("non_negative") else widened
+        row["warnings"] = [
+            f"cold start forecast using {len(neighbors)} metadata neighbors; uncertainty widened"
+        ]
     return rows
+
+
+def _nearest_peers(
+    metadata: dict[str, Any], peers: list[dict[str, Any]], limit: int
+) -> list[dict[str, Any]]:
+    if not metadata:
+        return []
+    scored = []
+    for peer in peers:
+        distances = []
+        for name, value in metadata.items():
+            peer_value = peer["metadata"].get(name)
+            if value is None or peer_value is None:
+                continue
+            if isinstance(value, (int, float)) and isinstance(peer_value, (int, float)):
+                scale = abs(float(value)) + abs(float(peer_value)) + 1.0
+                distances.append(abs(float(value) - float(peer_value)) / scale)
+            else:
+                distances.append(float(str(value) != str(peer_value)))
+        if distances:
+            scored.append((sum(distances) / len(distances), peer))
+    scored.sort(key=lambda pair: pair[0])
+    return [peer for _, peer in scored[:limit]]
 
 
 def _hierarchy_rows(

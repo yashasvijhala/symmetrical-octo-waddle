@@ -13,7 +13,9 @@ HEADERS = {"X-Tenant-ID": "tenant-a"}
 
 def dataset_csv() -> bytes:
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=["sku", "date", "sales", "category", "promo"])
+    writer = csv.DictWriter(
+        output, fieldnames=["sku", "date", "sales", "category", "promo", "importance"]
+    )
     writer.writeheader()
     start = date(2026, 1, 1)
     for sku, base in (("a", 10), ("b", 20)):
@@ -25,6 +27,7 @@ def dataset_csv() -> bytes:
                     "sales": base + index % 7 + index * 0.1,
                     "category": "core",
                     "promo": int(index % 10 == 0),
+                    "importance": 2 if sku == "b" else 1,
                 }
             )
     return output.getvalue().encode()
@@ -66,7 +69,11 @@ def test_full_lightgbm_workflow(tmp_path) -> None:
                 "item_id_column": "sku",
                 "horizon": 3,
                 "non_negative": True,
-                "column_roles": {"category": "hierarchy", "promo": "known_future"},
+                "column_roles": {
+                    "category": "hierarchy",
+                    "promo": "known_future",
+                    "importance": "weight",
+                },
             },
         )
         assert finalized.status_code == 201, finalized.text
@@ -109,7 +116,13 @@ def test_full_lightgbm_workflow(tmp_path) -> None:
             headers=HEADERS,
             json={
                 "model_id": model_id,
-                "new_items": [{"item_id": "new-sku", "level_prior": 15}],
+                "new_items": [
+                    {
+                        "item_id": "new-sku",
+                        "level_prior": 15,
+                        "metadata": {"category": "core"},
+                    }
+                ],
                 "future_covariates": future_covariates,
             },
         )
@@ -121,7 +134,7 @@ def test_full_lightgbm_workflow(tmp_path) -> None:
         downloaded = client.get(f"/v1/forecasts/{forecast.json()['id']}/download", headers=HEADERS)
         assert downloaded.status_code == 200
         rows = downloaded.json()
-        assert any(row["method"] == "cold_start_analog" for row in rows)
+        assert any(row["method"] == "cold_start_metadata_neighbors" for row in rows)
         assert any(row["method"] == "bottom_up_reconciled" for row in rows)
 
         promoted = client.post(
@@ -160,3 +173,31 @@ def test_tenant_isolation(tmp_path) -> None:
         dataset_id = created.json()["id"]
         hidden = client.get(f"/v1/datasets/{dataset_id}", headers={"X-Tenant-ID": "tenant-b"})
         assert hidden.status_code == 404
+
+
+def test_production_authentication_and_idempotency(tmp_path) -> None:
+    app = create_app(
+        Settings(environment="production", state_dir=tmp_path, api_keys={"tenant-a": "secret"})
+    )
+    with TestClient(app) as client:
+        assert client.post("/v1/datasets", json={"name": "sales"}).status_code == 401
+        assert (
+            client.post(
+                "/v1/datasets",
+                headers={"X-Tenant-ID": "tenant-a", "X-API-Key": "wrong"},
+                json={"name": "sales"},
+            ).status_code
+            == 401
+        )
+        headers = {
+            "X-Tenant-ID": "tenant-a",
+            "X-API-Key": "secret",
+            "Idempotency-Key": "create-sales-once",
+        }
+        first = client.post("/v1/datasets", headers=headers, json={"name": "sales"})
+        second = client.post("/v1/datasets", headers=headers, json={"name": "sales"})
+        conflict = client.post("/v1/datasets", headers=headers, json={"name": "other"})
+        assert first.status_code == 201
+        assert second.status_code == 201
+        assert first.json()["id"] == second.json()["id"]
+        assert conflict.status_code == 409

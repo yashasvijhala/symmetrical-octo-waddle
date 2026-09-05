@@ -24,6 +24,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.runtime = service_runtime
+    app.state.settings = settings
     app.include_router(api_router, prefix=settings.api_prefix)
 
     @app.get("/", include_in_schema=False)

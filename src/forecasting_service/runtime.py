@@ -25,6 +25,7 @@ class Runtime:
         )
         self._cancelled: set[str] = set()
         self._lock = threading.Lock()
+        self._recover_interrupted_jobs()
 
     def submit_experiment(self, experiment_id: str, job_id: str) -> None:
         self.executor.submit(self._run_experiment, experiment_id, job_id)
@@ -187,6 +188,24 @@ class Runtime:
             "wape": sum(absolute) / denominator if denominator else sum(absolute) / len(absolute),
             "bias": sum(errors) / denominator if denominator else sum(errors) / len(errors),
         }
+
+    def _recover_interrupted_jobs(self) -> None:
+        for job in self.store.list("jobs"):
+            if job.get("state") not in {"queued", "running"}:
+                continue
+            resource_id = job.get("resource_id", "")
+            self.store.update(
+                "jobs",
+                job["id"],
+                state="queued",
+                stage="recovered_after_restart",
+                progress=0,
+                retry_count=int(job.get("retry_count", 0)) + 1,
+            )
+            if resource_id.startswith("exp_"):
+                self.executor.submit(self._run_experiment, resource_id, job["id"])
+            elif resource_id.startswith("fc_"):
+                self.executor.submit(self._run_forecast, resource_id, job["id"])
 
 
 class CancelledError(Exception):

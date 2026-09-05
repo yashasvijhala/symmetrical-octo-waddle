@@ -1,8 +1,10 @@
 import hashlib
+import hmac
+import json
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, File, Header, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
 
 from forecasting_service.data import canonicalize, infer_frequency, profile_file
@@ -16,14 +18,62 @@ from forecasting_service.schemas import (
     IdResponse,
     PromotionRequest,
 )
-from forecasting_service.store import NotFoundError
+from forecasting_service.store import IdempotencyConflictError, NotFoundError
 
 router = APIRouter()
-Tenant = Annotated[str, Header(alias="X-Tenant-ID", min_length=1, max_length=100)]
+IdempotencyKey = Annotated[
+    str | None, Header(alias="Idempotency-Key", min_length=1, max_length=200)
+]
 
 
 def runtime(request: Request) -> Runtime:
     return request.app.state.runtime
+
+
+def tenant_identity(
+    request: Request,
+    x_tenant_id: Annotated[
+        str | None, Header(alias="X-Tenant-ID", min_length=1, max_length=100)
+    ] = None,
+    x_api_key: Annotated[str | None, Header(alias="X-API-Key", max_length=500)] = None,
+) -> str:
+    settings = request.app.state.settings
+    if settings.api_keys:
+        if not x_tenant_id or not x_api_key:
+            raise HTTPException(status_code=401, detail="X-Tenant-ID and X-API-Key are required")
+        expected = settings.api_keys.get(x_tenant_id)
+        if expected is None or not hmac.compare_digest(expected, x_api_key):
+            raise HTTPException(status_code=401, detail="invalid API credentials")
+        return x_tenant_id
+    if settings.environment == "production":
+        raise HTTPException(status_code=503, detail="production API keys are not configured")
+    return x_tenant_id or "local"
+
+
+Tenant = Annotated[str, Depends(tenant_identity)]
+
+
+def fingerprint(body: Any) -> str:
+    canonical = json.dumps(
+        body.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), allow_nan=False
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def create_idempotent(
+    request: Request,
+    records: list[tuple[str, dict[str, Any]]],
+    tenant_id: str,
+    scope: str,
+    key: str | None,
+    body: Any,
+) -> tuple[dict[str, Any], bool]:
+    try:
+        return runtime(request).store.create_idempotent(
+            records, tenant_id, scope, key, fingerprint(body)
+        )
+    except IdempotencyConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def owned(request: Request, collection: str, resource_id: str, tenant_id: str) -> dict[str, Any]:
@@ -34,21 +84,35 @@ def owned(request: Request, collection: str, resource_id: str, tenant_id: str) -
 
 
 @router.post("/datasets", response_model=IdResponse, status_code=status.HTTP_201_CREATED)
-def create_dataset(body: DatasetCreate, request: Request, tenant_id: Tenant) -> IdResponse:
+def create_dataset(
+    body: DatasetCreate,
+    request: Request,
+    tenant_id: Tenant,
+    idempotency_key: IdempotencyKey = None,
+) -> IdResponse:
     store = runtime(request).store
     dataset_id = store.new_id("ds")
-    store.create(
-        "datasets",
-        {
-            "id": dataset_id,
-            "tenant_id": tenant_id,
-            "name": body.name,
-            "description": body.description,
-            "state": "draft",
-            "versions": {},
-        },
+    dataset, _ = create_idempotent(
+        request,
+        [
+            (
+                "datasets",
+                {
+                    "id": dataset_id,
+                    "tenant_id": tenant_id,
+                    "name": body.name,
+                    "description": body.description,
+                    "state": "draft",
+                    "versions": {},
+                },
+            )
+        ],
+        tenant_id,
+        "create_dataset",
+        idempotency_key,
+        body,
     )
-    return IdResponse(id=dataset_id, state="draft")
+    return IdResponse(id=dataset["id"], state=dataset["state"])
 
 
 @router.get("/datasets")
@@ -85,14 +149,9 @@ def upload_dataset(
     if not file.filename:
         raise HTTPException(status_code=422, detail="uploaded file must have a filename")
     try:
-        path = runtime(request).store.save_upload(dataset_id, file.filename, file.file)
+        path, digest = runtime(request).store.save_upload(dataset_id, file.filename, file.file)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    digest_builder = hashlib.sha256()
-    with path.open("rb") as uploaded:
-        while chunk := uploaded.read(1024 * 1024):
-            digest_builder.update(chunk)
-    digest = digest_builder.hexdigest()
     runtime(request).store.update(
         "datasets", dataset_id, upload_path=str(path), upload_sha256=digest, state="uploaded"
     )
@@ -167,38 +226,53 @@ def get_dataset_version(
 
 
 @router.post("/experiments", response_model=IdResponse, status_code=status.HTTP_202_ACCEPTED)
-def create_experiment(body: ExperimentCreate, request: Request, tenant_id: Tenant) -> IdResponse:
+def create_experiment(
+    body: ExperimentCreate,
+    request: Request,
+    tenant_id: Tenant,
+    idempotency_key: IdempotencyKey = None,
+) -> IdResponse:
     store = runtime(request).store
     dataset = owned(request, "datasets", body.dataset_id, tenant_id)
     if str(body.dataset_version) not in dataset.get("versions", {}):
         raise HTTPException(status_code=409, detail="finalize the requested dataset version first")
     experiment_id = store.new_id("exp")
     job_id = store.new_id("job")
-    store.create(
-        "experiments",
-        {
-            "id": experiment_id,
-            "tenant_id": tenant_id,
-            "dataset_id": body.dataset_id,
-            "dataset_version": body.dataset_version,
-            "state": "queued",
-            "job_id": job_id,
-            "config": body.model_dump(mode="json"),
-        },
+    experiment, created = create_idempotent(
+        request,
+        [
+            (
+                "experiments",
+                {
+                    "id": experiment_id,
+                    "tenant_id": tenant_id,
+                    "dataset_id": body.dataset_id,
+                    "dataset_version": body.dataset_version,
+                    "state": "queued",
+                    "job_id": job_id,
+                    "config": body.model_dump(mode="json"),
+                },
+            ),
+            (
+                "jobs",
+                {
+                    "id": job_id,
+                    "tenant_id": tenant_id,
+                    "resource_id": experiment_id,
+                    "state": "queued",
+                    "stage": "queued",
+                    "progress": 0,
+                },
+            ),
+        ],
+        tenant_id,
+        "create_experiment",
+        idempotency_key,
+        body,
     )
-    store.create(
-        "jobs",
-        {
-            "id": job_id,
-            "tenant_id": tenant_id,
-            "resource_id": experiment_id,
-            "state": "queued",
-            "stage": "queued",
-            "progress": 0,
-        },
-    )
-    runtime(request).submit_experiment(experiment_id, job_id)
-    return IdResponse(id=experiment_id, state="queued")
+    if created:
+        runtime(request).submit_experiment(experiment_id, job_id)
+    return IdResponse(id=experiment["id"], state=experiment["state"])
 
 
 @router.get("/experiments/{experiment_id}")
@@ -271,37 +345,52 @@ def retire_model(model_id: str, request: Request, tenant_id: Tenant) -> dict[str
 
 
 @router.post("/forecasts", response_model=IdResponse, status_code=status.HTTP_202_ACCEPTED)
-def create_forecast(body: ForecastCreate, request: Request, tenant_id: Tenant) -> IdResponse:
+def create_forecast(
+    body: ForecastCreate,
+    request: Request,
+    tenant_id: Tenant,
+    idempotency_key: IdempotencyKey = None,
+) -> IdResponse:
     store = runtime(request).store
     model = owned(request, "models", body.model_id, tenant_id)
     if model["state"] != "ready":
         raise HTTPException(status_code=409, detail="model is not available for prediction")
     forecast_id = store.new_id("fc")
     job_id = store.new_id("job")
-    store.create(
-        "forecasts",
-        {
-            "id": forecast_id,
-            "tenant_id": tenant_id,
-            "model_id": body.model_id,
-            "state": "queued",
-            "job_id": job_id,
-            "request": body.model_dump(mode="json"),
-        },
+    forecast, created = create_idempotent(
+        request,
+        [
+            (
+                "forecasts",
+                {
+                    "id": forecast_id,
+                    "tenant_id": tenant_id,
+                    "model_id": body.model_id,
+                    "state": "queued",
+                    "job_id": job_id,
+                    "request": body.model_dump(mode="json"),
+                },
+            ),
+            (
+                "jobs",
+                {
+                    "id": job_id,
+                    "tenant_id": tenant_id,
+                    "resource_id": forecast_id,
+                    "state": "queued",
+                    "stage": "queued",
+                    "progress": 0,
+                },
+            ),
+        ],
+        tenant_id,
+        "create_forecast",
+        idempotency_key,
+        body,
     )
-    store.create(
-        "jobs",
-        {
-            "id": job_id,
-            "tenant_id": tenant_id,
-            "resource_id": forecast_id,
-            "state": "queued",
-            "stage": "queued",
-            "progress": 0,
-        },
-    )
-    runtime(request).submit_forecast(forecast_id, job_id)
-    return IdResponse(id=forecast_id, state="queued")
+    if created:
+        runtime(request).submit_forecast(forecast_id, job_id)
+    return IdResponse(id=forecast["id"], state=forecast["state"])
 
 
 @router.get("/forecasts/{forecast_id}")

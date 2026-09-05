@@ -115,9 +115,20 @@ def canonicalize(path: Path, manifest: DatasetManifest) -> pl.DataFrame:
         frame = frame.with_columns(pl.col("timestamp").cast(pl.Datetime))
     elif frame.schema["timestamp"] != pl.Datetime:
         frame = frame.with_columns(pl.col("timestamp").cast(pl.Datetime, strict=False))
-    if frame.get_column("timestamp").null_count() or frame.get_column("target").null_count():
-        raise ValueError("timestamp and target values must be parseable and non-null")
+    invalid_timestamp = frame.get_column("timestamp").null_count()
+    invalid_target = frame.select((~pl.col("target").is_finite()).sum()).item()
+    if invalid_timestamp or invalid_target:
+        raise ValueError("timestamp and target values must be parseable, finite, and non-null")
     for name, role in manifest.column_roles.items():
+        if role == ColumnRole.WEIGHT and name in frame.columns:
+            frame = frame.with_columns(pl.col(name).cast(pl.Float64, strict=False))
+            invalid_weight = frame.select(
+                (pl.col(name).is_null() | (~pl.col(name).is_finite()) | (pl.col(name) < 0)).sum()
+            ).item()
+            if invalid_weight:
+                raise ValueError(f"weight column {name!r} must contain finite non-negative values")
+            if not frame.get_column(name).max():
+                raise ValueError(f"weight column {name!r} must contain at least one positive value")
         if role in {ColumnRole.STATIC, ColumnRole.HIERARCHY} and name in frame.columns:
             max_values = cast(
                 int,
