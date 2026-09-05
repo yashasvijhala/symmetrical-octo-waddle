@@ -1,0 +1,48 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments and local tooling
+.venv/
+venv/
+.direnv/
+.env
+.env.*
+!.env.example
+.python-version
+
+# Build and packaging output
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDE and OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Runtime state, uploaded data, and generated ML artifacts
+data/
+artifacts/
+models/
+checkpoints/
+outputs/
+tmp/
+*.joblib
+*.pkl
+*.onnx
+*.ckpt
+*.parquet
+*.arrow
+
+# Local research working files (the reviewed plan lives in docs/)
+.research/
