@@ -44,7 +44,12 @@ def wait_for(client: TestClient, path: str) -> dict:
 
 def test_full_lightgbm_workflow(tmp_path, database_url: str) -> None:
     app = create_app(
-        Settings(environment="test", state_dir=tmp_path, database_url=database_url, max_workers=1)
+        Settings(
+            environment="test",
+            state_dir=tmp_path,
+            database_url=database_url,
+            test_max_workers=1,
+        )
     )
     with TestClient(app) as client:
         created = client.post("/v1/datasets", headers=HEADERS, json={"name": "sales"})

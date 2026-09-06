@@ -7,13 +7,12 @@ Next.js product
 
 ## Implementation status
 
-The repository now contains a complete runnable local implementation of the data lifecycle,
+The repository now contains a complete runnable implementation of the data lifecycle,
 profiling, immutable manifests, feature compilation, rolling backtests, global LightGBM,
-AutoGluon adapter, model registry, background jobs, forecasting, cold starts, bottom-up hierarchy
-aggregation, actuals, and monitoring described below. PostgreSQL/S3/distributed-queue adapters,
+AutoGluon adapter, model registry, durable Hatchet workers, forecasting, cold starts, bottom-up
+hierarchy aggregation, actuals, and monitoring described below. An S3-compatible artifact adapter,
 MinT reconciliation, foundation-model weight downloads, and infrastructure-specific authentication
-remain deployment choices; their interfaces and API contracts are already separated from the local
-durable adapters.
+remain deployment choices; their interfaces and API contracts are separated from execution.
 
 ## Executive decision
 
@@ -280,25 +279,26 @@ not assume it always improves every node.
 
 ```text
 Next.js ──JWT/service token──> FastAPI control plane ──> PostgreSQL metadata
-   │                               │                         │
+   │                               │                         ▲
+   │                               └──jobs──> Hatchet ───────┤
    └──presigned upload────────> S3/MinIO <──artifacts──── CPU/GPU workers
                                    │                         │
                                    └──Parquet datasets───────┘
-                                             │
-                                      Redis job/cache layer
 ```
 
 - **FastAPI control plane:** authentication context, validation, idempotency, resource ownership,
   signed upload/download URLs, OpenAPI contracts, and job submission. It never performs long training
   in the request process.
-- **Worker plane:** separate queues for profile/feature, CPU training, GPU training, backtest, and
-  prediction. Jobs are retryable, resource-limited, cancellable between stages, and heartbeat.
+- **Worker plane:** distinct Hatchet tasks route CPU/GPU training and prediction to independently
+  scalable worker pools. Jobs are idempotent, retryable, tenant-fair, resource-limited, cancellable
+  between stages, and heartbeat-backed.
 - **PostgreSQL:** tenants, datasets/versions, schemas, experiments, jobs, model registry, forecast
   requests, metrics, lineage, and audit events.
 - **S3-compatible object store:** uploads, normalized Parquet, fold manifests, feature specs, model
   artifacts, predictions, and reports. Do not put large model blobs in PostgreSQL.
-- **Redis:** queue transport, short-lived progress/cache, and distributed locks—not authoritative
-  experiment state.
+- **Hatchet:** PostgreSQL-backed durable scheduling, retries, timeouts, worker recovery, priorities,
+  tenant concurrency, and cancellation. It is orchestration state, while the service database is
+  the client-facing job projection.
 
 Start as a modular monolith with worker processes. Keep ports/adapters around storage, queue, and model
 engines so they can be separated later without creating premature microservices.

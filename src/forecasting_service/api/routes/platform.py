@@ -83,6 +83,26 @@ def owned(request: Request, collection: str, resource_id: str, tenant_id: str) -
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+def dispatch_required(
+    request: Request, collection: str, resource: dict[str, Any], created: bool
+) -> bool:
+    """Treat the PostgreSQL job record as an outbox for safe idempotent redispatch."""
+
+    store = runtime(request).store
+    job = store.get("jobs", resource["job_id"])
+    if not created and not job.get("orchestrator_run_id"):
+        store.update(collection, resource["id"], state="queued", error=None)
+        store.update(
+            "jobs",
+            job["id"],
+            state="queued",
+            stage="redispatching",
+            progress=0,
+            error=None,
+        )
+    return created or not job.get("orchestrator_run_id")
+
+
 @router.post("/datasets", response_model=IdResponse, status_code=status.HTTP_201_CREATED)
 def create_dataset(
     body: DatasetCreate,
@@ -270,8 +290,9 @@ def create_experiment(
         idempotency_key,
         body,
     )
-    if created:
-        runtime(request).submit_experiment(experiment_id, job_id)
+    if dispatch_required(request, "experiments", experiment, created):
+        runtime(request).submit_experiment(experiment["id"], experiment["job_id"])
+    experiment = store.get("experiments", experiment["id"])
     return IdResponse(id=experiment["id"], state=experiment["state"])
 
 
@@ -390,8 +411,9 @@ def create_forecast(
         idempotency_key,
         body,
     )
-    if created:
-        runtime(request).submit_forecast(forecast_id, job_id)
+    if dispatch_required(request, "forecasts", forecast, created):
+        runtime(request).submit_forecast(forecast["id"], forecast["job_id"])
+    forecast = store.get("forecasts", forecast["id"])
     return IdResponse(id=forecast["id"], state=forecast["state"])
 
 

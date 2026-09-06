@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi[standard]>=0.141.1",
+    "hatchet-sdk>=1.33,<2",
     "joblib>=1.5",
     "lightgbm>=4.6",
     "numpy>=2.0",
@@ -23,6 +24,7 @@ autogluon = ["autogluon.timeseries>=1.6,<1.7"]
 [project.scripts]
 forecast-api = "forecasting_service.main:run"
 forecast-db = "forecasting_service.db:main"
+forecast-worker = "forecasting_service.worker:main"
 
 [dependency-groups]
 dev = [

@@ -1,11 +1,12 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from forecasting_service import __version__
 from forecasting_service.api.router import api_router
 from forecasting_service.config import Settings, get_settings
-from forecasting_service.runtime import Runtime
+from forecasting_service.runtime import DispatchError, Runtime
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -15,8 +16,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         yield
-        service_runtime.executor.shutdown(wait=True, cancel_futures=False)
-        service_runtime.store.close()
+        service_runtime.close()
 
     app = FastAPI(
         title="Forecasting Service",
@@ -27,6 +27,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.runtime = service_runtime
     app.state.settings = settings
     app.include_router(api_router, prefix=settings.api_prefix)
+
+    @app.exception_handler(DispatchError)
+    async def dispatch_unavailable(_: Request, exc: DispatchError) -> JSONResponse:
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
 
     @app.get("/", include_in_schema=False)
     async def service_metadata() -> dict[str, str]:
