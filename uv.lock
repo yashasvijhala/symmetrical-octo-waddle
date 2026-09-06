@@ -1119,6 +1119,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },
     { name = "hatchet-sdk" },
+    { name = "httpx" },
     { name = "joblib" },
     { name = "lightgbm" },
     { name = "numpy" },
@@ -1149,6 +1150,7 @@ requires-dist = [
     { name = "autogluon-timeseries", marker = "extra == 'autogluon'", specifier = ">=1.6,<1.7" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.141.1" },
     { name = "hatchet-sdk", specifier = ">=1.33,<2" },
+    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "joblib", specifier = ">=1.5" },
     { name = "lightgbm", specifier = ">=4.6" },
     { name = "numpy", specifier = ">=2.0" },

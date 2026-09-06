@@ -35,8 +35,6 @@ Requirements: Python 3.12+, `uv`, and OpenMP for LightGBM. On macOS:
 brew install libomp
 uv sync --dev
 ./scripts/db sync
-uv run forecast-worker --kind cpu  # separate terminal
-uv run fastapi dev src/forecasting_service/main.py
 ```
 
 For the full AutoGluon/Chronos model zoo:
@@ -45,13 +43,59 @@ For the full AutoGluon/Chronos model zoo:
 uv sync --dev --extra autogluon
 ```
 
+### Fast local smoke test
+
+This runs the API with the deterministic test dispatcher. It is useful for local development and
+does not test Hatchet itself:
+
+```bash
+# Terminal 1
+FORECAST_ENVIRONMENT=test uv run forecast-api
+
+# Terminal 2: creates a complete, idempotent demo under tenant "demo"
+uv run forecast-seed-demo
+```
+
+### Real distributed-worker test
+
+Put a valid Hatchet Cloud or self-hosted worker token in `.env` as `HATCHET_CLIENT_TOKEN`. Start the
+worker before submitting jobs:
+
+```bash
+# Terminal 1
+uv run forecast-worker --kind cpu
+
+# Terminal 2
+uv run forecast-api
+
+# Terminal 3
+uv run forecast-seed-demo
+```
+
+The official local Hatchet CLI can start a dashboard-backed development server with
+`hatchet server start --disable-auth`; copy its fixed development worker token from **Settings → API
+Tokens** into `.env`. Run `uv run forecast-worker --kind gpu` when enabling AutoGluon; CPU-only
+deployments never load its optional dependency.
+
 Open `http://127.0.0.1:8000/docs`. In local/test mode, send `X-Tenant-ID` to exercise isolation;
 otherwise the tenant defaults to `local`. Copy `.env.example` to `.env` to customize the service.
-Set `HATCHET_CLIENT_TOKEN` for both API and worker processes. Run a GPU worker with
-`uv run forecast-worker --kind gpu` when enabling AutoGluon; CPU-only deployments never load its
-optional dependency.
 In production, configure `FORECAST_API_KEYS` as a JSON tenant-to-secret map and send both
 `X-Tenant-ID` and `X-API-Key`. Production starts fail closed when keys are absent.
+
+### Test and inspect
+
+```bash
+uv run pytest --cov=forecasting_service
+curl http://127.0.0.1:8000/v1/health/ready
+curl -H 'X-Tenant-ID: demo' http://127.0.0.1:8000/v1/datasets
+curl -H 'X-Tenant-ID: demo' http://127.0.0.1:8000/v1/models
+
+psql postgresql://localhost:5432/symmetrical-octo-waddle \
+  -c 'select tenant_id, state, count(*) from jobs group by tenant_id, state;'
+```
+
+The automated tests create temporary PostgreSQL schemas and remove them afterward. They do not
+modify the demo/application rows in the public schema.
 
 ## Database schema
 
