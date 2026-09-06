@@ -4,12 +4,15 @@ services:
     ports:
       - "8000:8000"
     environment:
-      FORECAST_ENVIRONMENT: ${FORECAST_ENVIRONMENT:-local}
-      FORECAST_STATE_DIR: /var/lib/forecasting
-      FORECAST_DATABASE_URL: ${FORECAST_DATABASE_URL:-postgresql://host.docker.internal:5432/symmetrical-octo-waddle}
-      FORECAST_DATABASE_POOL_MIN_SIZE: 1
-      FORECAST_DATABASE_POOL_MAX_SIZE: 10
-      FORECAST_API_KEYS: '${FORECAST_API_KEYS:-{}}'
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      STATE_DIR: /var/lib/forecasting
+      OBJECT_STORE_BACKEND: ${OBJECT_STORE_BACKEND:-local}
+      R2_ENDPOINT: ${R2_ENDPOINT:-}
+      R2_BUCKET: ${R2_BUCKET:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://host.docker.internal:5432/symmetrical-octo-waddle}
+      API_KEYS: '${API_KEYS:-{}}'
       HATCHET_CLIENT_TOKEN: ${HATCHET_CLIENT_TOKEN:-}
     volumes:
       - forecast-state:/var/lib/forecasting
@@ -19,13 +22,14 @@ services:
     build: .
     command: ["/app/.venv/bin/forecast-worker", "--kind", "cpu"]
     environment:
-      FORECAST_ENVIRONMENT: ${FORECAST_ENVIRONMENT:-local}
-      FORECAST_STATE_DIR: /var/lib/forecasting
-      FORECAST_DATABASE_URL: ${FORECAST_DATABASE_URL:-postgresql://host.docker.internal:5432/symmetrical-octo-waddle}
-      FORECAST_DATABASE_POOL_MIN_SIZE: 1
-      FORECAST_DATABASE_POOL_MAX_SIZE: 4
-      FORECAST_CPU_WORKER_SLOTS: ${FORECAST_CPU_WORKER_SLOTS:-2}
-      FORECAST_TENANT_MAX_CONCURRENT_JOBS: ${FORECAST_TENANT_MAX_CONCURRENT_JOBS:-2}
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      STATE_DIR: /var/lib/forecasting
+      OBJECT_STORE_BACKEND: ${OBJECT_STORE_BACKEND:-local}
+      R2_ENDPOINT: ${R2_ENDPOINT:-}
+      R2_BUCKET: ${R2_BUCKET:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://host.docker.internal:5432/symmetrical-octo-waddle}
       HATCHET_CLIENT_TOKEN: ${HATCHET_CLIENT_TOKEN:-}
     volumes:
       - forecast-state:/var/lib/forecasting
@@ -38,16 +42,17 @@ services:
     build:
       context: .
       args:
-        FORECAST_EXTRAS: autogluon
+        INSTALL_EXTRAS: autogluon
     command: ["/app/.venv/bin/forecast-worker", "--kind", "gpu"]
     environment:
-      FORECAST_ENVIRONMENT: ${FORECAST_ENVIRONMENT:-local}
-      FORECAST_STATE_DIR: /var/lib/forecasting
-      FORECAST_DATABASE_URL: ${FORECAST_DATABASE_URL:-postgresql://host.docker.internal:5432/symmetrical-octo-waddle}
-      FORECAST_DATABASE_POOL_MIN_SIZE: 1
-      FORECAST_DATABASE_POOL_MAX_SIZE: 2
-      FORECAST_GPU_WORKER_SLOTS: ${FORECAST_GPU_WORKER_SLOTS:-1}
-      FORECAST_TENANT_MAX_CONCURRENT_JOBS: ${FORECAST_TENANT_MAX_CONCURRENT_JOBS:-2}
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      STATE_DIR: /var/lib/forecasting
+      OBJECT_STORE_BACKEND: ${OBJECT_STORE_BACKEND:-local}
+      R2_ENDPOINT: ${R2_ENDPOINT:-}
+      R2_BUCKET: ${R2_BUCKET:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://host.docker.internal:5432/symmetrical-octo-waddle}
       HATCHET_CLIENT_TOKEN: ${HATCHET_CLIENT_TOKEN:-}
     volumes:
       - forecast-state:/var/lib/forecasting

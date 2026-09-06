@@ -5,9 +5,10 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 
 from forecasting_service.data import canonicalize, infer_frequency, profile_file
+from forecasting_service.object_store import ObjectRef
 from forecasting_service.runtime import Runtime
 from forecasting_service.schemas import (
     ActualsCreate,
@@ -153,7 +154,8 @@ def upload_intent(dataset_id: str, request: Request, tenant_id: Tenant) -> dict[
         "url": f"/v1/datasets/{dataset_id}/upload",
         "content_type": "multipart/form-data",
         "note": (
-            "Local adapter. Replace with an S3 presigned PUT adapter in distributed deployments."
+            "Use this multipart API endpoint. Direct R2 presigned PUT support will be exposed "
+            "through the same resource contract."
         ),
     }
 
@@ -169,16 +171,26 @@ def upload_dataset(
     if not file.filename:
         raise HTTPException(status_code=422, detail="uploaded file must have a filename")
     try:
-        path, digest = runtime(request).store.save_upload(dataset_id, file.filename, file.file)
+        suffix = Path(file.filename).suffix.lower()
+        if suffix not in {".csv", ".parquet"}:
+            raise ValueError("only CSV and Parquet uploads are supported")
+        object_ref, _ = runtime(request).objects.put_stream(
+            runtime(request).objects.key(
+                "tenants", tenant_id, "datasets", dataset_id, "source" + suffix
+            ),
+            file.file,
+            file.content_type or "application/octet-stream",
+            request.app.state.settings.max_upload_bytes,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     runtime(request).store.update(
-        "datasets", dataset_id, upload_path=str(path), upload_sha256=digest, state="uploaded"
+        "datasets", dataset_id, upload_object=object_ref.as_dict(), state="uploaded"
     )
     return {
         "dataset_id": dataset_id,
         "filename": file.filename,
-        "sha256": digest,
+        "sha256": object_ref.sha256,
         "state": "uploaded",
     }
 
@@ -186,10 +198,11 @@ def upload_dataset(
 @router.post("/datasets/{dataset_id}/profile", status_code=status.HTTP_201_CREATED)
 def profile_dataset(dataset_id: str, request: Request, tenant_id: Tenant) -> dict[str, Any]:
     dataset = owned(request, "datasets", dataset_id, tenant_id)
-    if not dataset.get("upload_path"):
+    if not dataset.get("upload_object"):
         raise HTTPException(status_code=409, detail="upload data before profiling")
     try:
-        profile = profile_file(Path(dataset["upload_path"]))
+        source = runtime(request).objects.materialize(ObjectRef.from_dict(dataset["upload_object"]))
+        profile = profile_file(source)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"could not profile dataset: {exc}") from exc
     runtime(request).store.update("datasets", dataset_id, profile=profile, state="profiled")
@@ -209,26 +222,40 @@ def finalize_dataset(
     dataset_id: str, body: DatasetManifest, request: Request, tenant_id: Tenant
 ) -> dict[str, Any]:
     dataset = owned(request, "datasets", dataset_id, tenant_id)
-    if not dataset.get("upload_path"):
+    if not dataset.get("upload_object"):
         raise HTTPException(status_code=409, detail="upload data before finalizing")
     try:
-        frame = canonicalize(Path(dataset["upload_path"]), body)
+        source = runtime(request).objects.materialize(ObjectRef.from_dict(dataset["upload_object"]))
+        frame = canonicalize(source, body)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     frequency, season = infer_frequency(frame)
     versions = dataset.get("versions", {})
     version = max((int(value) for value in versions), default=0) + 1
-    normalized = runtime(request).store.path("artifacts", f"{dataset_id}/v{version}/data.parquet")
-    frame.write_parquet(normalized, compression="zstd", statistics=True)
+    with runtime(request).objects.temporary_path(".parquet") as normalized:
+        frame.write_parquet(normalized, compression="zstd", statistics=True)
+        data_ref = runtime(request).objects.put_file(
+            runtime(request).objects.key(
+                "tenants",
+                tenant_id,
+                "datasets",
+                dataset_id,
+                "versions",
+                str(version),
+                "canonical.parquet",
+            ),
+            normalized,
+            "application/vnd.apache.parquet",
+        )
     versions[str(version)] = {
         "version": version,
         "manifest": body.model_dump(mode="json"),
-        "normalized_path": str(normalized),
+        "data_object": data_ref.as_dict(),
         "rows": frame.height,
         "items": frame.get_column("item_id").n_unique(),
         "inferred_frequency": frequency,
         "suggested_seasonal_period": season,
-        "content_sha256": dataset["upload_sha256"],
+        "content_sha256": dataset["upload_object"]["sha256"],
     }
     runtime(request).store.update("datasets", dataset_id, versions=versions, state="ready")
     return versions[str(version)]
@@ -423,12 +450,18 @@ def get_forecast(forecast_id: str, request: Request, tenant_id: Tenant) -> dict[
 
 
 @router.get("/forecasts/{forecast_id}/download")
-def download_forecast(forecast_id: str, request: Request, tenant_id: Tenant) -> FileResponse:
+def download_forecast(forecast_id: str, request: Request, tenant_id: Tenant):
     forecast = owned(request, "forecasts", forecast_id, tenant_id)
     if forecast.get("state") != "succeeded":
         raise HTTPException(status_code=409, detail="forecast is not complete")
+    ref = ObjectRef.from_dict(forecast["prediction_object"])
+    filename = f"{forecast_id}.json"
+    if url := runtime(request).objects.download_url(ref, filename):
+        return RedirectResponse(url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
     return FileResponse(
-        forecast["output_path"], media_type="application/json", filename=f"{forecast_id}.json"
+        runtime(request).objects.materialize(ref),
+        media_type=ref.content_type,
+        filename=filename,
     )
 
 

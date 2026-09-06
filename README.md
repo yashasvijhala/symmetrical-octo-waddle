@@ -21,8 +21,8 @@ training, model registration, cold-start forecasting, promotion, and accuracy mo
   idempotency for dataset, experiment, and forecast creation.
 - Model registry, baseline promotion gate, retirement, immutable lineage, actuals, and monitoring.
 - Metadata/level-prior cold starts and coherent bottom-up hierarchy aggregates.
-- Clean storage, orchestration, and model boundaries that preserve the HTTP contracts when local
-  artifact storage is replaced by an object store.
+- Immutable object storage for uploads, canonical Parquet, model bundles, and predictions. Local
+  disk for development; Cloudflare R2 in production, with checksums and short-lived download URLs.
 
 The research and production evolution decisions are in
 [the architecture plan](docs/forecasting-system-plan.md).
@@ -50,7 +50,7 @@ does not test Hatchet itself:
 
 ```bash
 # Terminal 1
-FORECAST_ENVIRONMENT=test uv run forecast-api
+ENVIRONMENT=test uv run forecast-api
 
 # Terminal 2: creates a complete, idempotent demo under tenant "demo"
 uv run forecast-seed-demo
@@ -78,9 +78,10 @@ Tokens** into `.env`. Run `uv run forecast-worker --kind gpu` when enabling Auto
 deployments never load its optional dependency.
 
 Open `http://127.0.0.1:8000/docs`. In local/test mode, send `X-Tenant-ID` to exercise isolation;
-otherwise the tenant defaults to `local`. Copy `.env.example` to `.env` to customize the service.
-In production, configure `FORECAST_API_KEYS` as a JSON tenant-to-secret map and send both
-`X-Tenant-ID` and `X-API-Key`. Production starts fail closed when keys are absent.
+otherwise the tenant defaults to `local`. Copy `.env.example` to `.env` and fill in credentials.
+In production, set `API_KEYS` as a JSON tenant-to-secret map and send both `X-Tenant-ID` and
+`X-API-Key`. Production starts fail closed when keys are absent. Set `OBJECT_STORE_BACKEND=r2`
+with the `R2_*` credentials when workers no longer share a local volume.
 
 ### Test and inspect
 
@@ -134,13 +135,13 @@ uv run ty check
 uv run pytest --cov=forecasting_service
 ```
 
-Runtime state, uploads, normalized data, models, and predictions live under `.forecast-state/` and
-are ignored by Git.
+Runtime state and the local object store live under `.forecast-state/` and are ignored by Git.
 
 ## Deployment boundary
 
 The API never executes ML work. Hatchet provides durable scheduling, retry, fairness, and worker
 recovery; PostgreSQL remains the application-facing job-state projection. Scale CPU and GPU workers
-independently. API and workers must share the artifact volume in this local/Compose profile. Replace
-that volume with object storage before distributing workers across hosts. Accuracy and throughput
-must be benchmarked against representative customer data before an SLO can be claimed.
+independently. The local Compose profile shares `STATE_DIR` so API and workers see the same
+artifacts. Switch `OBJECT_STORE_BACKEND` to `r2` before distributing workers across hosts.
+Accuracy and throughput must be benchmarked against representative customer data before an SLO can
+be claimed.

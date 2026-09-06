@@ -19,10 +19,8 @@ async def liveness() -> HealthResponse:
 
 @router.get("/ready", response_model=HealthResponse)
 async def readiness(request: Request) -> HealthResponse:
-    """Report whether configured dependencies are ready.
-
-    The local durable store must be initialized for the process to be ready.
-    """
+    """Report whether PostgreSQL and object storage are reachable."""
 
     request.app.state.runtime.store.ping()
+    request.app.state.runtime.objects.ping()
     return HealthResponse()

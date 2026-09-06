@@ -2,7 +2,6 @@ import hashlib
 import json
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -26,24 +25,18 @@ class IdempotencyConflictError(ValueError):
 
 
 class Store:
-    """Pooled PostgreSQL metadata store plus local artifact storage."""
+    """Pooled PostgreSQL metadata store."""
 
     collections = COLLECTIONS
 
     def __init__(
         self,
-        root: Path,
         database_url: str,
-        max_upload_bytes: int = 2_147_483_648,
         pool_min_size: int = 1,
         pool_max_size: int = 10,
     ) -> None:
         if pool_min_size > pool_max_size:
             raise ValueError("database pool minimum cannot exceed maximum")
-        self.root = root.resolve()
-        self.max_upload_bytes = max_upload_bytes
-        for name in ("uploads", "artifacts", "predictions"):
-            (self.root / name).mkdir(parents=True, exist_ok=True)
         self.pool = ConnectionPool(
             conninfo=database_url,
             min_size=pool_min_size,
@@ -201,33 +194,6 @@ class Store:
         if row is None:
             raise NotFoundError(f"{collection.rstrip('s')} {record_id!r} was not found")
         return self._decode(row[0])
-
-    def save_upload(self, dataset_id: str, filename: str, source: Any) -> tuple[Path, str]:
-        suffix = Path(filename).suffix.lower()
-        if suffix not in {".csv", ".parquet"}:
-            raise ValueError("only CSV and Parquet uploads are supported")
-        target = self.root / "uploads" / f"{dataset_id}{suffix}"
-        size = 0
-        digest = hashlib.sha256()
-        try:
-            with target.open("wb") as output:
-                while chunk := source.read(1024 * 1024):
-                    size += len(chunk)
-                    if size > self.max_upload_bytes:
-                        raise ValueError(f"upload exceeds {self.max_upload_bytes} byte limit")
-                    output.write(chunk)
-                    digest.update(chunk)
-        except Exception:
-            target.unlink(missing_ok=True)
-            raise
-        return target, digest.hexdigest()
-
-    def path(self, kind: str, name: str) -> Path:
-        if kind not in {"uploads", "artifacts", "predictions"}:
-            raise ValueError(f"invalid artifact kind: {kind}")
-        path = self.root / kind / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return path
 
     def ping(self) -> None:
         with self._connect() as connection:

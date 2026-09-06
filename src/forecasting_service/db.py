@@ -36,7 +36,7 @@ def main() -> None:
     args = parser.parse_args()
     database_url = Settings().database_url
     if not database_url:
-        parser.error("FORECAST_DATABASE_URL is required for database commands")
+        parser.error("DATABASE_URL is required for database commands")
     engine = create_engine(sqlalchemy_url(database_url))
 
     if args.command in {"push", "sync"}:

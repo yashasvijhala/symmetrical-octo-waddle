@@ -45,9 +45,11 @@ def wait_for(client: TestClient, path: str) -> dict:
 def test_full_lightgbm_workflow(tmp_path, database_url: str) -> None:
     app = create_app(
         Settings(
+            _env_file=None,
             environment="test",
             state_dir=tmp_path,
             database_url=database_url,
+            object_store_backend="local",
             test_max_workers=1,
         )
     )
@@ -174,7 +176,15 @@ def test_full_lightgbm_workflow(tmp_path, database_url: str) -> None:
 
 
 def test_tenant_isolation(tmp_path, database_url: str) -> None:
-    app = create_app(Settings(environment="test", state_dir=tmp_path, database_url=database_url))
+    app = create_app(
+        Settings(
+            _env_file=None,
+            environment="test",
+            state_dir=tmp_path,
+            database_url=database_url,
+            object_store_backend="local",
+        )
+    )
     with TestClient(app) as client:
         created = client.post("/v1/datasets", headers=HEADERS, json={"name": "private"})
         dataset_id = created.json()["id"]
@@ -185,9 +195,11 @@ def test_tenant_isolation(tmp_path, database_url: str) -> None:
 def test_production_authentication_and_idempotency(tmp_path, database_url: str) -> None:
     app = create_app(
         Settings(
+            _env_file=None,
             environment="production",
             state_dir=tmp_path,
             database_url=database_url,
+            object_store_backend="local",
             api_keys={"tenant-a": "secret"},
         )
     )

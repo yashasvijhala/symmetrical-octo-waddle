@@ -4,7 +4,6 @@ from typing import Any, cast
 import pytest
 
 from forecasting_service import worker as worker_module
-from forecasting_service.config import Settings
 
 
 @dataclass
@@ -32,15 +31,6 @@ def test_worker_registry_routes_resources_and_applies_durability(
 ) -> None:
     worker_module.get_registry.cache_clear()
     monkeypatch.setattr(worker_module, "Hatchet", FakeHatchet)
-    monkeypatch.setattr(
-        worker_module,
-        "get_settings",
-        lambda: Settings(
-            environment="test",
-            tenant_max_concurrent_jobs=3,
-            job_retries=4,
-        ),
-    )
 
     registry = worker_module.get_registry()
 
@@ -54,8 +44,8 @@ def test_worker_registry_routes_resources_and_applies_durability(
     ]
     for task in registry.tasks_for("all"):
         fake_task = cast(Any, task)
-        assert fake_task.options["retries"] == 4
-        assert fake_task.options["concurrency"].max_runs == 3
+        assert fake_task.options["retries"] == worker_module.JOB_RETRIES
+        assert fake_task.options["concurrency"].max_runs == worker_module.TENANT_MAX_CONCURRENT_JOBS
         assert fake_task.options["concurrency"].is_tenant_scoped is True
         assert fake_task.options["idempotency"].key_expression == "input.job_id"
 

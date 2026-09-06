@@ -1,4 +1,6 @@
 import json
+import tarfile
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -13,16 +15,17 @@ from forecasting_service.modeling import (
     train_autogluon,
     train_lightgbm,
 )
+from forecasting_service.object_store import ObjectRef, create_object_store
 from forecasting_service.schemas import DatasetManifest, ExperimentCreate, ForecastCreate
 from forecasting_service.store import NotFoundError, Store
 
 
 class Runtime:
     def __init__(self, settings: Settings, *, dispatch_jobs: bool = True) -> None:
+        self.settings = settings
+        self.objects = create_object_store(settings)
         self.store = Store(
-            settings.state_dir,
             settings.database_url,
-            settings.max_upload_bytes,
             settings.database_pool_min_size,
             settings.database_pool_max_size,
         )
@@ -116,7 +119,9 @@ class Runtime:
             dataset = self.store.get("datasets", experiment["dataset_id"])
             version = dataset["versions"][str(experiment["dataset_version"])]
             manifest = DatasetManifest.model_validate(version["manifest"])
-            frame = pl.read_parquet(version["normalized_path"])
+            frame = pl.read_parquet(
+                self.objects.materialize(ObjectRef.from_dict(version["data_object"]))
+            )
             self._check_cancelled(job_id, cancelled)
             self._stage(job_id, "backtesting", 20, cancelled)
             config = ExperimentCreate.model_validate(experiment["config"])
@@ -124,11 +129,41 @@ class Runtime:
             if "model_id" not in experiment:
                 self.store.update("experiments", experiment_id, model_id=model_id)
             if config.model_policy in {"autogluon", "high_accuracy"}:
-                artifact = self.store.path("artifacts", model_id)
-                result = train_autogluon(frame, manifest, config, artifact)
+                with tempfile.TemporaryDirectory(
+                    prefix="forecast-autogluon-", dir=self.objects.cache_dir
+                ) as directory:
+                    artifact = Path(directory) / "model"
+                    result = train_autogluon(frame, manifest, config, artifact)
+                    with self.objects.temporary_path(".tar.gz") as package:
+                        with tarfile.open(package, "w:gz") as archive:
+                            archive.add(artifact, arcname="model")
+                        artifact_ref = self.objects.put_file(
+                            self.objects.key(
+                                "tenants",
+                                experiment["tenant_id"],
+                                "models",
+                                model_id,
+                                "model.tar.gz",
+                            ),
+                            package,
+                            "application/gzip",
+                        )
             else:
-                artifact = self.store.path("artifacts", f"{model_id}.joblib")
-                result = train_lightgbm(frame, manifest, config, artifact)
+                with self.objects.temporary_path(".joblib") as artifact:
+                    result = train_lightgbm(frame, manifest, config, artifact)
+                    artifact_ref = self.objects.put_file(
+                        self.objects.key(
+                            "tenants",
+                            experiment["tenant_id"],
+                            "models",
+                            model_id,
+                            "model.joblib",
+                        ),
+                        artifact,
+                        "application/octet-stream",
+                    )
+            result.pop("artifact_path", None)
+            result["artifact_object"] = artifact_ref.as_dict()
             self._check_cancelled(job_id, cancelled)
             self._stage(job_id, "packaging", 90, cancelled)
             try:
@@ -192,29 +227,48 @@ class Runtime:
             dataset = self.store.get("datasets", dataset_id)
             version = request.dataset_version if request.dataset_id else model["dataset_version"]
             dataset_version = dataset["versions"][str(version)]
-            frame = pl.read_parquet(dataset_version["normalized_path"])
+            frame = pl.read_parquet(
+                self.objects.materialize(ObjectRef.from_dict(dataset_version["data_object"]))
+            )
             self._stage(job_id, "predicting", 40, cancelled)
+            artifact = self.objects.materialize(ObjectRef.from_dict(model["artifact_object"]))
             if model["engine"] == "autogluon":
-                rows = forecast_autogluon(
-                    Path(model["artifact_path"]), frame, request.future_covariates
-                )
+                with tempfile.TemporaryDirectory(
+                    prefix="forecast-autogluon-load-", dir=self.objects.cache_dir
+                ) as directory:
+                    with tarfile.open(artifact, "r:gz") as archive:
+                        archive.extractall(directory, filter="data")
+                    rows = forecast_autogluon(
+                        Path(directory) / "model", frame, request.future_covariates
+                    )
             else:
                 rows = forecast_lightgbm(
-                    Path(model["artifact_path"]),
+                    artifact,
                     frame,
                     request.horizon,
                     request.future_covariates,
                     request.new_items,
                 )
             self._check_cancelled(job_id, cancelled)
-            output = self.store.path("predictions", f"{forecast_id}.json")
-            output.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+            with self.objects.temporary_path(".json") as output:
+                output.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+                prediction_ref = self.objects.put_file(
+                    self.objects.key(
+                        "tenants",
+                        request_record["tenant_id"],
+                        "forecasts",
+                        forecast_id,
+                        "predictions.json",
+                    ),
+                    output,
+                    "application/json",
+                )
             summary = {"rows": len(rows), "items": len({row["item_id"] for row in rows})}
             self.store.update(
                 "forecasts",
                 forecast_id,
                 state="succeeded",
-                output_path=str(output),
+                prediction_object=prediction_ref.as_dict(),
                 summary=summary,
                 error=None,
             )
@@ -254,7 +308,8 @@ class Runtime:
         actual_records = self.store.list("actuals", tenant_id, model_id=model_id)
         predicted: dict[tuple[str, str], float] = {}
         for forecast in forecasts:
-            for row in json.loads(Path(forecast["output_path"]).read_text(encoding="utf-8")):
+            content = self.objects.read_bytes(ObjectRef.from_dict(forecast["prediction_object"]))
+            for row in json.loads(content):
                 predicted[(row["item_id"], row["timestamp"])] = float(
                     row.get("mean", row.get("0.5", 0))
                 )

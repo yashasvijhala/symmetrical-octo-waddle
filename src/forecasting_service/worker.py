@@ -15,7 +15,13 @@ from hatchet_sdk.types.concurrency import ConcurrencyExpression, ConcurrencyLimi
 from hatchet_sdk.types.idempotency import StatusBasedIdempotencyConfig
 from pydantic import BaseModel, ConfigDict
 
-from forecasting_service.config import Settings, get_settings
+from forecasting_service.config import (
+    JOB_EXECUTION_TIMEOUT_SECONDS,
+    JOB_RETRIES,
+    JOB_SCHEDULE_TIMEOUT_SECONDS,
+    TENANT_MAX_CONCURRENT_JOBS,
+    get_settings,
+)
 
 JobKind = Literal["experiment", "forecast"]
 WorkerKind = Literal["cpu", "gpu", "all"]
@@ -60,17 +66,17 @@ class WorkerRegistry:
         ]
 
 
-def _task_options(settings: Settings) -> dict[str, Any]:
+def _task_options() -> dict[str, Any]:
     return {
         "input_validator": JobInput,
-        "execution_timeout": timedelta(seconds=settings.job_execution_timeout_seconds),
-        "schedule_timeout": timedelta(seconds=settings.job_schedule_timeout_seconds),
-        "retries": settings.job_retries,
+        "execution_timeout": timedelta(seconds=JOB_EXECUTION_TIMEOUT_SECONDS),
+        "schedule_timeout": timedelta(seconds=JOB_SCHEDULE_TIMEOUT_SECONDS),
+        "retries": JOB_RETRIES,
         "backoff_factor": 2.0,
         "backoff_max_seconds": 300,
         "concurrency": ConcurrencyExpression(
             expression="input.tenant_id",
-            max_runs=settings.tenant_max_concurrent_jobs,
+            max_runs=TENANT_MAX_CONCURRENT_JOBS,
             limit_strategy=ConcurrencyLimitStrategy.GROUP_ROUND_ROBIN,
             name="forecasting-tenant-jobs",
             is_tenant_scoped=True,
@@ -83,9 +89,8 @@ def _task_options(settings: Settings) -> dict[str, Any]:
 
 @lru_cache
 def get_registry() -> WorkerRegistry:
-    settings = get_settings()
     hatchet = Hatchet()
-    options = _task_options(settings)
+    options = _task_options()
 
     @hatchet.task(name="forecast-train-cpu", **options)
     def experiment_cpu(job: JobInput, context: Context) -> dict[str, str]:
@@ -134,7 +139,6 @@ def _execute(kind: JobKind, job: JobInput, context: Context) -> dict[str, str]:
         else:
             service.run_forecast(job.resource_id, job.job_id, cancelled)
     except Exception:
-        settings = get_settings()
         collection = "experiments" if kind == "experiment" else "forecasts"
         if context.is_cancelled or service.store.get("jobs", job.job_id)["state"] == "cancelled":
             service.store.update(collection, job.resource_id, state="cancelled")
@@ -142,7 +146,7 @@ def _execute(kind: JobKind, job: JobInput, context: Context) -> dict[str, str]:
                 "jobs", job.job_id, state="cancelled", stage="cancelled", progress=100
             )
             return {"job_id": job.job_id, "resource_id": job.resource_id}
-        if context.retry_count < settings.job_retries:
+        if context.retry_count < JOB_RETRIES:
             service.store.update(collection, job.resource_id, state="queued")
             service.store.update(
                 "jobs",

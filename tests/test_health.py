@@ -5,7 +5,15 @@ from forecasting_service.main import create_app
 
 
 def test_liveness(tmp_path, database_url: str) -> None:
-    app = create_app(Settings(environment="test", state_dir=tmp_path, database_url=database_url))
+    app = create_app(
+        Settings(
+            _env_file=None,
+            environment="test",
+            state_dir=tmp_path,
+            database_url=database_url,
+            object_store_backend="local",
+        )
+    )
     with TestClient(app) as client:
         response = client.get("/v1/health/live")
 
@@ -14,7 +22,15 @@ def test_liveness(tmp_path, database_url: str) -> None:
 
 
 def test_readiness(tmp_path, database_url: str) -> None:
-    app = create_app(Settings(environment="test", state_dir=tmp_path, database_url=database_url))
+    app = create_app(
+        Settings(
+            _env_file=None,
+            environment="test",
+            state_dir=tmp_path,
+            database_url=database_url,
+            object_store_backend="local",
+        )
+    )
     with TestClient(app) as client:
         response = client.get("/v1/health/ready")
 
