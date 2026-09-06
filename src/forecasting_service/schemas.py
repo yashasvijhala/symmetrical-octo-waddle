@@ -4,17 +4,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, FiniteFloat, model_validator
 
 
-class ResourceState(StrEnum):
-    DRAFT = "draft"
-    READY = "ready"
-    QUEUED = "queued"
-    RUNNING = "running"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
-    RETIRED = "retired"
-
-
 class ColumnRole(StrEnum):
     TARGET = "target"
     TIMESTAMP = "timestamp"
@@ -118,11 +107,3 @@ class PromotionRequest(BaseModel):
 class IdResponse(BaseModel):
     id: str
     state: str
-
-
-class ProblemDetail(BaseModel):
-    type: str = "about:blank"
-    title: str
-    status: int
-    detail: str
-    code: str

@@ -16,8 +16,8 @@ training, model registration, cold-start forecasting, promotion, and accuracy mo
   empirical residual quantiles.
 - Optional AutoGluon `TimeSeriesPredictor` adapter and model-zoo leaderboard.
 - Asynchronous persistent experiment/forecast jobs with progress, failure details, and cancellation.
-- Transactional SQLite metadata in WAL mode, atomic job creation, restart recovery, and payload-safe
-  idempotency for dataset, experiment, and forecast creation.
+- Pooled PostgreSQL metadata, atomic job creation, restart recovery, and payload-safe idempotency for
+  dataset, experiment, and forecast creation.
 - Model registry, baseline promotion gate, retirement, immutable lineage, actuals, and monitoring.
 - Metadata/level-prior cold starts and coherent bottom-up hierarchy aggregates.
 - Local durable adapters requiring no cloud account. Storage/model/queue boundaries can be replaced
@@ -47,6 +47,21 @@ otherwise the tenant defaults to `local`. Copy `.env.example` to `.env` to custo
 In production, configure `FORECAST_API_KEYS` as a JSON tenant-to-secret map and send both
 `X-Tenant-ID` and `X-API-Key`. Production starts fail closed when keys are absent.
 
+## Database schema
+
+Metadata uses PostgreSQL. The local setup targets
+`postgresql://localhost:5432/symmetrical-octo-waddle`; tests create and remove isolated PostgreSQL
+schemas so they exercise the same storage implementation without touching application data.
+
+```bash
+./scripts/db push     # create missing tables and indexes without deleting data
+./scripts/db sync     # push and verify table compatibility
+./scripts/db status   # verify the current database schema
+```
+
+Equivalent Make targets are `db-push`, `db-sync`, and `db-status`. Run `db push` as a deployment
+release step before starting the API. Application workers never mutate the schema.
+
 ## Workflow
 
 1. `POST /v1/datasets`, then upload CSV/Parquet to `/upload`.
@@ -74,12 +89,13 @@ are ignored by Git.
 
 ## Deployment boundary
 
-The included runtime is a production-hardened **single-node** profile: persistent SQLite/WAL,
-bounded streaming uploads, atomic idempotency, restart recovery, API-key isolation, immutable
-artifacts, non-root container execution, and health probes. Run one API process per state volume.
+The included runtime is a production-hardened **single-worker** profile: pooled PostgreSQL metadata,
+bounded streaming uploads, transaction/advisory-lock idempotency, restart recovery, API-key
+isolation, immutable artifacts, non-root container execution, and health probes. Run one job-owning
+API process per artifact volume.
 
-Horizontal scaling requires the distributed adapters described in the architecture plan:
-PostgreSQL metadata, S3-compatible artifacts, and a leased external job queue. Those services need
-real deployment credentials and infrastructure and are intentionally not simulated in this repo.
+Horizontal worker scaling still requires the distributed adapters described in the architecture
+plan: S3-compatible artifacts and a leased external job queue. Those services need real deployment
+credentials and infrastructure and are intentionally not simulated in this repo.
 Accuracy and throughput must also be benchmarked against representative customer data before an
 SLO can be claimed.

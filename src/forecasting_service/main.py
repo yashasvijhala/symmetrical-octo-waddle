@@ -15,7 +15,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         yield
-        service_runtime.executor.shutdown(wait=False, cancel_futures=False)
+        service_runtime.executor.shutdown(wait=True, cancel_futures=False)
+        service_runtime.store.close()
 
     app = FastAPI(
         title="Forecasting Service",

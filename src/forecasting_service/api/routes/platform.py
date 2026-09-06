@@ -330,9 +330,11 @@ def promote_model(
             status_code=409,
             detail="model did not beat its baseline; force with justification to promote",
         )
-    for other in runtime(request).store.list("models", tenant_id):
-        if other.get("dataset_id") == model["dataset_id"] and other.get("stage") == "champion":
-            runtime(request).store.update("models", other["id"], stage="candidate")
+    champions = runtime(request).store.list(
+        "models", tenant_id, dataset_id=model["dataset_id"], stage="champion"
+    )
+    for other in champions:
+        runtime(request).store.update("models", other["id"], stage="candidate")
     return runtime(request).store.update(
         "models", model_id, stage="champion", promotion_justification=body.justification
     )

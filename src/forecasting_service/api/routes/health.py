@@ -24,6 +24,5 @@ async def readiness(request: Request) -> HealthResponse:
     The local durable store must be initialized for the process to be ready.
     """
 
-    if not request.app.state.runtime.store.root.exists():
-        raise RuntimeError("state store is unavailable")
+    request.app.state.runtime.store.ping()
     return HealthResponse()

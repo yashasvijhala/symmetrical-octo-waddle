@@ -19,7 +19,13 @@ from forecasting_service.store import Store
 
 class Runtime:
     def __init__(self, settings: Settings) -> None:
-        self.store = Store(settings.state_dir, settings.max_upload_bytes)
+        self.store = Store(
+            settings.state_dir,
+            settings.database_url,
+            settings.max_upload_bytes,
+            settings.database_pool_min_size,
+            settings.database_pool_max_size,
+        )
         self.executor = ThreadPoolExecutor(
             max_workers=settings.max_workers, thread_name_prefix="forecast"
         )
@@ -155,16 +161,8 @@ class Runtime:
 
     def monitoring(self, tenant_id: str, model_id: str) -> dict[str, Any]:
         self.store.owned("models", model_id, tenant_id)
-        forecasts = [
-            item
-            for item in self.store.list("forecasts", tenant_id)
-            if item.get("model_id") == model_id and item.get("state") == "succeeded"
-        ]
-        actual_records = [
-            item
-            for item in self.store.list("actuals", tenant_id)
-            if item.get("model_id") == model_id
-        ]
+        forecasts = self.store.list("forecasts", tenant_id, model_id=model_id, state="succeeded")
+        actual_records = self.store.list("actuals", tenant_id, model_id=model_id)
         predicted: dict[tuple[str, str], float] = {}
         for forecast in forecasts:
             for row in json.loads(Path(forecast["output_path"]).read_text(encoding="utf-8")):
@@ -190,9 +188,11 @@ class Runtime:
         }
 
     def _recover_interrupted_jobs(self) -> None:
-        for job in self.store.list("jobs"):
-            if job.get("state") not in {"queued", "running"}:
-                continue
+        interrupted = [
+            *self.store.list("jobs", state="queued"),
+            *self.store.list("jobs", state="running"),
+        ]
+        for job in interrupted:
             resource_id = job.get("resource_id", "")
             self.store.update(
                 "jobs",

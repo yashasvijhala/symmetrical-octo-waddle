@@ -396,7 +396,7 @@ resolved immutable model version.
 ### Phase 1 — contracts and persistence (implemented with local durable adapters)
 
 - Pydantic request/response models and generated OpenAPI examples;
-- PostgreSQL schema/migrations, repository interfaces, tenant ownership, idempotency records;
+- PostgreSQL schema management, repository interfaces, tenant ownership, idempotency records;
 - S3/MinIO adapter and presigned upload flow;
 - dataset/profile/manifest state machines and job abstraction.
 

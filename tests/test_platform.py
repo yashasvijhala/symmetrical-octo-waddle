@@ -42,8 +42,10 @@ def wait_for(client: TestClient, path: str) -> dict:
     raise AssertionError(f"timed out waiting for {path}")
 
 
-def test_full_lightgbm_workflow(tmp_path) -> None:
-    app = create_app(Settings(environment="test", state_dir=tmp_path, max_workers=1))
+def test_full_lightgbm_workflow(tmp_path, database_url: str) -> None:
+    app = create_app(
+        Settings(environment="test", state_dir=tmp_path, database_url=database_url, max_workers=1)
+    )
     with TestClient(app) as client:
         created = client.post("/v1/datasets", headers=HEADERS, json={"name": "sales"})
         assert created.status_code == 201
@@ -166,8 +168,8 @@ def test_full_lightgbm_workflow(tmp_path) -> None:
         assert monitoring.json()["mae"] == 0
 
 
-def test_tenant_isolation(tmp_path) -> None:
-    app = create_app(Settings(environment="test", state_dir=tmp_path))
+def test_tenant_isolation(tmp_path, database_url: str) -> None:
+    app = create_app(Settings(environment="test", state_dir=tmp_path, database_url=database_url))
     with TestClient(app) as client:
         created = client.post("/v1/datasets", headers=HEADERS, json={"name": "private"})
         dataset_id = created.json()["id"]
@@ -175,9 +177,14 @@ def test_tenant_isolation(tmp_path) -> None:
         assert hidden.status_code == 404
 
 
-def test_production_authentication_and_idempotency(tmp_path) -> None:
+def test_production_authentication_and_idempotency(tmp_path, database_url: str) -> None:
     app = create_app(
-        Settings(environment="production", state_dir=tmp_path, api_keys={"tenant-a": "secret"})
+        Settings(
+            environment="production",
+            state_dir=tmp_path,
+            database_url=database_url,
+            api_keys={"tenant-a": "secret"},
+        )
     )
     with TestClient(app) as client:
         assert client.post("/v1/datasets", json={"name": "sales"}).status_code == 401

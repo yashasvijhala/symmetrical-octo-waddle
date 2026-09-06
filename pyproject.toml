@@ -12,7 +12,9 @@ dependencies = [
     "polars>=1.32",
     "pyarrow>=20",
     "pydantic-settings>=2.10",
+    "psycopg[binary,pool]>=3.2",
     "scikit-learn>=1.7",
+    "sqlalchemy>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -20,6 +22,7 @@ autogluon = ["autogluon.timeseries>=1.6,<1.7"]
 
 [project.scripts]
 forecast-api = "forecasting_service.main:run"
+forecast-db = "forecasting_service.db:main"
 
 [dependency-groups]
 dev = [

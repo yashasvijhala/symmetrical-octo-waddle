@@ -6,6 +6,9 @@ services:
     environment:
       FORECAST_ENVIRONMENT: ${FORECAST_ENVIRONMENT:-local}
       FORECAST_STATE_DIR: /var/lib/forecasting
+      FORECAST_DATABASE_URL: ${FORECAST_DATABASE_URL:-postgresql://host.docker.internal:5432/symmetrical-octo-waddle}
+      FORECAST_DATABASE_POOL_MIN_SIZE: 1
+      FORECAST_DATABASE_POOL_MAX_SIZE: 10
       FORECAST_MAX_WORKERS: 2
       FORECAST_API_KEYS: '${FORECAST_API_KEYS:-{}}'
     volumes:
