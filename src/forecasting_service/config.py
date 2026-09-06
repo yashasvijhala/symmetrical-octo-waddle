@@ -29,7 +29,6 @@ class Settings(BaseSettings):
     )
 
     environment: Literal["local", "test", "staging", "production"] = "local"
-    log_level: str = "INFO"
     api_prefix: str = "/v1"
     state_dir: Path = Path(".forecast-state")
     object_store_backend: Literal["local", "r2"] = "local"

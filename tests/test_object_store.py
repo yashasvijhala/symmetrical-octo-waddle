@@ -18,7 +18,6 @@ from forecasting_service.object_store import (
 class FakeObject:
     body: bytes
     metadata: dict[str, str]
-    etag: str
 
 
 class FakeR2:
@@ -37,16 +36,7 @@ class FakeR2:
         self.objects[(bucket, key)] = FakeObject(
             body=Path(filename).read_bytes(),
             metadata=ExtraArgs.get("Metadata", {}),
-            etag='"etag-1"',
         )
-
-    def head_object(self, Bucket: str, Key: str) -> dict[str, Any]:
-        obj = self.objects[(Bucket, Key)]
-        return {
-            "ContentLength": len(obj.body),
-            "Metadata": obj.metadata,
-            "ETag": obj.etag,
-        }
 
     def download_file(self, bucket: str, key: str, filename: str, Config: object) -> None:
         del Config
@@ -117,6 +107,15 @@ def test_local_object_store_roundtrip_and_integrity(tmp_path: Path) -> None:
     materialized = store.materialize(ref)
     assert materialized.read_bytes() == source.read_bytes()
     assert store.download_url(ref, "source.csv") is None
+
+    with source.open("rb") as handle:
+        streamed = store.put_stream(
+            store.key("tenants", "acme", "datasets", "ds_1", "stream.csv"),
+            handle,
+            "text/csv",
+            max_bytes=1024,
+        )
+    assert store.materialize(streamed).read_bytes() == source.read_bytes()
 
     tampered = ObjectRef(
         uri=ref.uri,

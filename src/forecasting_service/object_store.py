@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-import shutil
 import tempfile
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
@@ -26,6 +25,7 @@ from forecasting_service.config import (
 )
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_IO_CHUNK = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -68,19 +68,16 @@ class ObjectStore(ABC):
         source: BinaryIO,
         content_type: str,
         max_bytes: int,
-    ) -> tuple[ObjectRef, Path]:
+    ) -> ObjectRef:
         with self.temporary_path(Path(key).suffix) as staged:
             size = 0
-            digest = hashlib.sha256()
             with staged.open("wb") as output:
-                while chunk := source.read(1024 * 1024):
+                while chunk := source.read(_IO_CHUNK):
                     size += len(chunk)
                     if size > max_bytes:
                         raise ValueError(f"upload exceeds {max_bytes} byte limit")
                     output.write(chunk)
-                    digest.update(chunk)
-            ref = self.put_file(key, staged, content_type)
-        return ref, self.materialize(ref)
+            return self.put_file(key, staged, content_type)
 
     def read_bytes(self, ref: ObjectRef) -> bytes:
         return self.materialize(ref).read_bytes()
@@ -107,7 +104,7 @@ class ObjectStore(ABC):
         digest = hashlib.sha256()
         size = 0
         with path.open("rb") as source:
-            while chunk := source.read(1024 * 1024):
+            while chunk := source.read(_IO_CHUNK):
                 size += len(chunk)
                 digest.update(chunk)
         return digest.hexdigest(), size
@@ -118,18 +115,19 @@ class ObjectStore(ABC):
         return self.cache_dir / "objects" / sha256[:2] / f"{sha256}{suffix}"
 
     def _prune_cache(self, protected: Path) -> None:
-        files = [
-            path
-            for path in (self.cache_dir / "objects").glob("*/*")
-            if path.is_file() and not path.name.endswith(".lock")
-        ]
-        total = sum(path.stat().st_size for path in files)
+        files: list[tuple[Path, int, int]] = []
+        total = 0
+        for path in (self.cache_dir / "objects").glob("*/*"):
+            if not path.is_file():
+                continue
+            stat = path.stat()
+            files.append((path, stat.st_size, stat.st_mtime_ns))
+            total += stat.st_size
         if total <= self.max_cache_bytes:
             return
-        for path in sorted(files, key=lambda item: item.stat().st_atime_ns):
+        for path, size, _ in sorted(files, key=lambda item: item[2]):
             if path == protected:
                 continue
-            size = path.stat().st_size
             path.unlink(missing_ok=True)
             total -= size
             if total <= self.max_cache_bytes:
@@ -143,12 +141,11 @@ class LocalObjectStore(ObjectStore):
         self.root.mkdir(parents=True, exist_ok=True)
 
     def put_file(self, key: str, source: Path, content_type: str) -> ObjectRef:
-        sha256, size = self._digest(source)
         target = self._path(key)
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
         try:
-            shutil.copyfile(source, temporary)
+            sha256, size = _copy_digest(source, temporary)
             os.replace(temporary, target)
         finally:
             temporary.unlink(missing_ok=True)
@@ -167,8 +164,10 @@ class LocalObjectStore(ObjectStore):
         path = self._path(f"{parsed.netloc}{parsed.path}")
         if not path.is_file():
             raise FileNotFoundError(ref.uri)
-        sha256, size = self._digest(path)
-        if sha256 != ref.sha256 or size != ref.size_bytes:
+        if path.stat().st_size != ref.size_bytes:
+            raise OSError(f"object integrity check failed: {ref.uri}")
+        sha256, _ = self._digest(path)
+        if sha256 != ref.sha256:
             raise OSError(f"object integrity check failed: {ref.uri}")
         return path
 
@@ -228,15 +227,12 @@ class R2ObjectStore(ObjectStore):
             ExtraArgs={"ContentType": content_type, "Metadata": {"sha256": sha256}},
             Config=self.transfer,
         )
-        head = self.client.head_object(Bucket=self.bucket, Key=object_key)
-        if int(head["ContentLength"]) != size or head.get("Metadata", {}).get("sha256") != sha256:
-            raise OSError(f"R2 upload verification failed for {object_key}")
         return ObjectRef(
             uri=f"r2://{self.bucket}/{object_key}",
             sha256=sha256,
             size_bytes=size,
             content_type=content_type,
-            etag=str(head.get("ETag", "")).strip('"') or None,
+            etag=sha256,
         )
 
     def materialize(self, ref: ObjectRef) -> Path:
@@ -286,6 +282,17 @@ class R2ObjectStore(ObjectStore):
         if self.prefix and not key.startswith(f"{self.prefix}/"):
             raise ValueError(f"object URI is outside configured R2 prefix: {uri}")
         return key
+
+
+def _copy_digest(source: Path, dest: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size = 0
+    with source.open("rb") as src, dest.open("wb") as output:
+        while chunk := src.read(_IO_CHUNK):
+            size += len(chunk)
+            digest.update(chunk)
+            output.write(chunk)
+    return digest.hexdigest(), size
 
 
 def create_object_store(settings: Settings) -> ObjectStore:

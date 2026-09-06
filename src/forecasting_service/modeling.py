@@ -103,7 +103,6 @@ def train_lightgbm(
     aggregate = _mean_metrics(fold_metrics)
     return {
         "engine": "lightgbm",
-        "artifact_path": str(artifact_path),
         "feature_spec": spec,
         "folds": fold_metrics,
         "metrics": aggregate,
@@ -195,7 +194,6 @@ def train_autogluon(
     best = leaderboard[0] if leaderboard else {}
     return {
         "engine": "autogluon",
-        "artifact_path": str(artifact_dir),
         "metrics": {"validation_score": best.get("score_val")},
         "leaderboard": leaderboard,
         "feature_spec": {"known_covariates": known},

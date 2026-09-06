@@ -59,7 +59,7 @@ class HatchetDispatcher:
         get_registry().hatchet.runs.cancel(run_id)
 
     def close(self) -> None:
-        return None
+        return
 
 
 class TestDispatcher:

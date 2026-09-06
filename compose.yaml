@@ -1,19 +1,22 @@
+x-forecast-env: &forecast-env
+  ENVIRONMENT: ${ENVIRONMENT:-local}
+  STATE_DIR: /var/lib/forecasting
+  OBJECT_STORE_BACKEND: ${OBJECT_STORE_BACKEND:-local}
+  R2_ENDPOINT: ${R2_ENDPOINT:-}
+  R2_BUCKET: ${R2_BUCKET:-}
+  R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+  R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+  DATABASE_URL: ${DATABASE_URL:-postgresql://host.docker.internal:5432/symmetrical-octo-waddle}
+  HATCHET_CLIENT_TOKEN: ${HATCHET_CLIENT_TOKEN:-}
+
 services:
   api:
     build: .
     ports:
       - "8000:8000"
     environment:
-      ENVIRONMENT: ${ENVIRONMENT:-local}
-      STATE_DIR: /var/lib/forecasting
-      OBJECT_STORE_BACKEND: ${OBJECT_STORE_BACKEND:-local}
-      R2_ENDPOINT: ${R2_ENDPOINT:-}
-      R2_BUCKET: ${R2_BUCKET:-}
-      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
-      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
-      DATABASE_URL: ${DATABASE_URL:-postgresql://host.docker.internal:5432/symmetrical-octo-waddle}
+      <<: *forecast-env
       API_KEYS: '${API_KEYS:-{}}'
-      HATCHET_CLIENT_TOKEN: ${HATCHET_CLIENT_TOKEN:-}
     volumes:
       - forecast-state:/var/lib/forecasting
     restart: unless-stopped
@@ -22,15 +25,7 @@ services:
     build: .
     command: ["/app/.venv/bin/forecast-worker", "--kind", "cpu"]
     environment:
-      ENVIRONMENT: ${ENVIRONMENT:-local}
-      STATE_DIR: /var/lib/forecasting
-      OBJECT_STORE_BACKEND: ${OBJECT_STORE_BACKEND:-local}
-      R2_ENDPOINT: ${R2_ENDPOINT:-}
-      R2_BUCKET: ${R2_BUCKET:-}
-      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
-      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
-      DATABASE_URL: ${DATABASE_URL:-postgresql://host.docker.internal:5432/symmetrical-octo-waddle}
-      HATCHET_CLIENT_TOKEN: ${HATCHET_CLIENT_TOKEN:-}
+      <<: *forecast-env
     volumes:
       - forecast-state:/var/lib/forecasting
     healthcheck:
@@ -45,15 +40,7 @@ services:
         INSTALL_EXTRAS: autogluon
     command: ["/app/.venv/bin/forecast-worker", "--kind", "gpu"]
     environment:
-      ENVIRONMENT: ${ENVIRONMENT:-local}
-      STATE_DIR: /var/lib/forecasting
-      OBJECT_STORE_BACKEND: ${OBJECT_STORE_BACKEND:-local}
-      R2_ENDPOINT: ${R2_ENDPOINT:-}
-      R2_BUCKET: ${R2_BUCKET:-}
-      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
-      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
-      DATABASE_URL: ${DATABASE_URL:-postgresql://host.docker.internal:5432/symmetrical-octo-waddle}
-      HATCHET_CLIENT_TOKEN: ${HATCHET_CLIENT_TOKEN:-}
+      <<: *forecast-env
     volumes:
       - forecast-state:/var/lib/forecasting
     healthcheck:

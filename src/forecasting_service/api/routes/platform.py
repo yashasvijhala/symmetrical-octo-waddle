@@ -170,21 +170,20 @@ def upload_dataset(
     owned(request, "datasets", dataset_id, tenant_id)
     if not file.filename:
         raise HTTPException(status_code=422, detail="uploaded file must have a filename")
+    service = runtime(request)
     try:
         suffix = Path(file.filename).suffix.lower()
         if suffix not in {".csv", ".parquet"}:
             raise ValueError("only CSV and Parquet uploads are supported")
-        object_ref, _ = runtime(request).objects.put_stream(
-            runtime(request).objects.key(
-                "tenants", tenant_id, "datasets", dataset_id, "source" + suffix
-            ),
+        object_ref = service.objects.put_stream(
+            service.objects.key("tenants", tenant_id, "datasets", dataset_id, "source" + suffix),
             file.file,
             file.content_type or "application/octet-stream",
             request.app.state.settings.max_upload_bytes,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    runtime(request).store.update(
+    service.store.update(
         "datasets", dataset_id, upload_object=object_ref.as_dict(), state="uploaded"
     )
     return {
@@ -224,18 +223,19 @@ def finalize_dataset(
     dataset = owned(request, "datasets", dataset_id, tenant_id)
     if not dataset.get("upload_object"):
         raise HTTPException(status_code=409, detail="upload data before finalizing")
+    service = runtime(request)
     try:
-        source = runtime(request).objects.materialize(ObjectRef.from_dict(dataset["upload_object"]))
+        source = service.objects.materialize(ObjectRef.from_dict(dataset["upload_object"]))
         frame = canonicalize(source, body)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     frequency, season = infer_frequency(frame)
     versions = dataset.get("versions", {})
     version = max((int(value) for value in versions), default=0) + 1
-    with runtime(request).objects.temporary_path(".parquet") as normalized:
+    with service.objects.temporary_path(".parquet") as normalized:
         frame.write_parquet(normalized, compression="zstd", statistics=True)
-        data_ref = runtime(request).objects.put_file(
-            runtime(request).objects.key(
+        data_ref = service.objects.put_file(
+            service.objects.key(
                 "tenants",
                 tenant_id,
                 "datasets",
@@ -257,7 +257,7 @@ def finalize_dataset(
         "suggested_seasonal_period": season,
         "content_sha256": dataset["upload_object"]["sha256"],
     }
-    runtime(request).store.update("datasets", dataset_id, versions=versions, state="ready")
+    service.store.update("datasets", dataset_id, versions=versions, state="ready")
     return versions[str(version)]
 
 

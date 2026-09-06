@@ -125,14 +125,6 @@ class Store:
                 )
         return values[0][1], True
 
-    def put(self, collection: str, record_id: str, record: dict[str, Any]) -> dict[str, Any]:
-        self._validate_collection(collection)
-        now = utc_now()
-        value = {**record, "updated_at": now}
-        with self._connect() as connection:
-            self._put(connection, collection, record_id, value)
-        return value
-
     def update(self, collection: str, record_id: str, **changes: Any) -> dict[str, Any]:
         self._validate_collection(collection)
         with self._connect() as connection:

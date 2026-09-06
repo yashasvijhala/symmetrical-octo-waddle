@@ -90,21 +90,20 @@ def _task_options() -> dict[str, Any]:
 @lru_cache
 def get_registry() -> WorkerRegistry:
     hatchet = Hatchet()
-    options = _task_options()
 
-    @hatchet.task(name="forecast-train-cpu", **options)
+    @hatchet.task(name="forecast-train-cpu", **_task_options())
     def experiment_cpu(job: JobInput, context: Context) -> dict[str, str]:
         return _execute("experiment", job, context)
 
-    @hatchet.task(name="forecast-train-gpu", **options)
+    @hatchet.task(name="forecast-train-gpu", **_task_options())
     def experiment_gpu(job: JobInput, context: Context) -> dict[str, str]:
         return _execute("experiment", job, context)
 
-    @hatchet.task(name="forecast-predict-cpu", **options)
+    @hatchet.task(name="forecast-predict-cpu", **_task_options())
     def forecast_cpu(job: JobInput, context: Context) -> dict[str, str]:
         return _execute("forecast", job, context)
 
-    @hatchet.task(name="forecast-predict-gpu", **options)
+    @hatchet.task(name="forecast-predict-gpu", **_task_options())
     def forecast_gpu(job: JobInput, context: Context) -> dict[str, str]:
         return _execute("forecast", job, context)
 

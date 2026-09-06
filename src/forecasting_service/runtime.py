@@ -122,7 +122,6 @@ class Runtime:
             frame = pl.read_parquet(
                 self.objects.materialize(ObjectRef.from_dict(version["data_object"]))
             )
-            self._check_cancelled(job_id, cancelled)
             self._stage(job_id, "backtesting", 20, cancelled)
             config = ExperimentCreate.model_validate(experiment["config"])
             model_id = experiment.get("model_id") or self.store.new_id("mdl")
@@ -162,9 +161,7 @@ class Runtime:
                         artifact,
                         "application/octet-stream",
                     )
-            result.pop("artifact_path", None)
             result["artifact_object"] = artifact_ref.as_dict()
-            self._check_cancelled(job_id, cancelled)
             self._stage(job_id, "packaging", 90, cancelled)
             try:
                 model = self.store.get("models", model_id)
@@ -203,6 +200,7 @@ class Runtime:
             )
         except CancelledError:
             self.store.update("experiments", experiment_id, state="cancelled")
+            self.store.update("jobs", job_id, state="cancelled", stage="cancelled", progress=100)
         except Exception as exc:  # persisted for API clients; worker must not disappear silently
             self.store.update("experiments", experiment_id, state="failed", error=str(exc))
             self.store.update(
@@ -251,7 +249,10 @@ class Runtime:
                 )
             self._check_cancelled(job_id, cancelled)
             with self.objects.temporary_path(".json") as output:
-                output.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+                output.write_text(
+                    json.dumps(rows, separators=(",", ":"), allow_nan=False),
+                    encoding="utf-8",
+                )
                 prediction_ref = self.objects.put_file(
                     self.objects.key(
                         "tenants",
@@ -283,6 +284,7 @@ class Runtime:
             )
         except CancelledError:
             self.store.update("forecasts", forecast_id, state="cancelled")
+            self.store.update("jobs", job_id, state="cancelled", stage="cancelled", progress=100)
         except Exception as exc:
             self.store.update("forecasts", forecast_id, state="failed", error=str(exc))
             self.store.update(
